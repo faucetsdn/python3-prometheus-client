@@ -30,7 +30,6 @@ CONTENT_TYPE_LATEST = str('text/plain; version=0.0.4; charset=utf-8')
 
 PYTHON26_OR_OLDER = sys.version_info < (2, 7)
 
-
 def make_wsgi_app(registry=core.REGISTRY):
     '''Create a WSGI app which serves the metrics from a registry.'''
     def prometheus_app(environ, start_response):
@@ -180,9 +179,7 @@ def basic_auth_handler(url, method, timeout, headers, data, username=None, passw
     return handle
 
 
-def push_to_gateway(
-        gateway, job, registry, grouping_key=None, timeout=30,
-        handler=default_handler):
+def push_to_gateway(gateway, job, registry, grouping_key=None, timeout=None, handler=default_handler):
     '''Push metrics to the given pushgateway.
 
     `gateway` the url for your push gateway. Either of the form
@@ -193,7 +190,7 @@ def push_to_gateway(
     `grouping_key` please see the pushgateway documentation for details.
                    Defaults to None
     `timeout` is how long push will attempt to connect before giving up.
-              Defaults to 30s, can be set to None for no timeout.
+              Defaults to None
     `handler` is an optional function which can be provided to perform
               requests to the 'gateway'.
               Defaults to None, in which case an http or https request
@@ -224,9 +221,7 @@ def push_to_gateway(
     _use_gateway('PUT', gateway, job, registry, grouping_key, timeout, handler)
 
 
-def pushadd_to_gateway(
-        gateway, job, registry, grouping_key=None, timeout=30,
-        handler=default_handler):
+def pushadd_to_gateway(gateway, job, registry, grouping_key=None, timeout=None, handler=default_handler):
     '''PushAdd metrics to the given pushgateway.
 
     `gateway` the url for your push gateway. Either of the form
@@ -237,7 +232,7 @@ def pushadd_to_gateway(
     `grouping_key` please see the pushgateway documentation for details.
                    Defaults to None
     `timeout` is how long push will attempt to connect before giving up.
-              Defaults to 30s, can be set to None for no timeout.
+              Defaults to None
     `handler` is an optional function which can be provided to perform
               requests to the 'gateway'.
               Defaults to None, in which case an http or https request
@@ -250,8 +245,7 @@ def pushadd_to_gateway(
     _use_gateway('POST', gateway, job, registry, grouping_key, timeout, handler)
 
 
-def delete_from_gateway(
-        gateway, job, grouping_key=None, timeout=30, handler=default_handler):
+def delete_from_gateway(gateway, job, grouping_key=None, timeout=None, handler=default_handler):
     '''Delete metrics from the given pushgateway.
 
     `gateway` the url for your push gateway. Either of the form
@@ -261,7 +255,7 @@ def delete_from_gateway(
     `grouping_key` please see the pushgateway documentation for details.
                    Defaults to None
     `timeout` is how long delete will attempt to connect before giving up.
-              Defaults to 30s, can be set to None for no timeout.
+              Defaults to None
     `handler` is an optional function which can be provided to perform
               requests to the 'gateway'.
               Defaults to None, in which case an http or https request
@@ -286,14 +280,12 @@ def _use_gateway(method, gateway, job, registry, grouping_key, timeout, handler)
 
     if grouping_key is None:
         grouping_key = {}
-    url += ''.join(
-        '/{0}/{1}'.format(quote_plus(str(k)), quote_plus(str(v)))
-        for k, v in sorted(grouping_key.items()))
+    url = url + ''.join(['/{0}/{1}'.format(quote_plus(str(k)), quote_plus(str(v)))
+                             for k, v in sorted(grouping_key.items())])
 
-    handler(
-        url=url, method=method, timeout=timeout,
-        headers=[('Content-Type', CONTENT_TYPE_LATEST)], data=data,
-    )()
+    headers=[('Content-Type', CONTENT_TYPE_LATEST)]
+    handler(url=url, method=method, timeout=timeout,
+            headers=headers, data=data)()
 
 
 def instance_ip_grouping_key():

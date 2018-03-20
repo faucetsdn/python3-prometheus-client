@@ -1,6 +1,5 @@
 from __future__ import unicode_literals
 
-import math
 import sys
 
 if sys.version_info < (2, 7):
@@ -9,20 +8,9 @@ if sys.version_info < (2, 7):
 else:
     import unittest
 
-from prometheus_client.core import (
-    CollectorRegistry,
-    CounterMetricFamily,
-    GaugeMetricFamily,
-    HistogramMetricFamily,
-    Metric,
-    SummaryMetricFamily,
-)
-from prometheus_client.exposition import (
-    generate_latest,
-)
-from prometheus_client.parser import (
-    text_string_to_metric_families,
-)
+from prometheus_client.core import *
+from prometheus_client.exposition import *
+from prometheus_client.parser import *
 
 
 class TestParse(unittest.TestCase):
@@ -132,8 +120,8 @@ a{foo="bar"} +Inf
 a{foo="baz"} -Inf
 """)
         metric_family = CounterMetricFamily("a", "help", labels=["foo"])
-        metric_family.add_metric(["bar"], float('inf'))
-        metric_family.add_metric(["baz"], float('-inf'))
+        metric_family.add_metric(["bar"], core._INF)
+        metric_family.add_metric(["baz"], core._MINUS_INF)
         self.assertEqual([metric_family], list(families))
 
     def test_spaces(self):
@@ -241,8 +229,8 @@ prometheus_local_storage_chunk_ops_total{type="unpin"} 32662.0
         families = list(text_string_to_metric_families(text))
 
         class TextCollector(object):
-            def collect(self):
-                return families
+          def collect(self):
+            return families
 
 
         registry = CollectorRegistry()

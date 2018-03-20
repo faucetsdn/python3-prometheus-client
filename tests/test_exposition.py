@@ -81,9 +81,9 @@ hh_sum 0.05
     def test_nonnumber(self):
         class MyNumber():
             def __repr__(self):
-                return "MyNumber(123)"
+              return "MyNumber(123)"
             def __float__(self):
-                return 123.0
+              return 123.0
         class MyCollector():
             def collect(self):
                 metric = Metric("nonnumber", "Non number", 'untyped')
@@ -172,8 +172,6 @@ class TestPushGateway(unittest.TestCase):
     def test_push_with_handler(self):
         def my_test_handler(url, method, timeout, headers, data):
             headers.append(['X-Test-Header', 'foobar'])
-            # Handler should be passed sane default timeout
-            self.assertEqual(timeout, 30)
             return default_handler(url, method, timeout, headers, data)
         push_to_gateway(self.address, "my_job", self.registry, handler=my_test_handler)
         self.assertEqual(self.requests[0][0].command, 'PUT')

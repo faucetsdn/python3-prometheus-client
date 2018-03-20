@@ -21,7 +21,7 @@ except ImportError:
 from threading import Lock
 from timeit import default_timer
 
-from decorator import decorate
+from .decorator import decorate
 
 _METRIC_NAME_RE = re.compile(r'^[a-zA-Z_:][a-zA-Z0-9_:]*$')
 _METRIC_LABEL_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
