@@ -1,12 +1,23 @@
 from __future__ import unicode_literals
 
 import inspect
-import os
-import threading
 import time
 import unittest
 
-from prometheus_client.core import *
+from prometheus_client.core import (
+    CollectorRegistry,
+    Counter,
+    CounterMetricFamily,
+    Gauge,
+    GaugeMetricFamily,
+    Histogram,
+    HistogramMetricFamily,
+    Metric,
+    Summary,
+    SummaryMetricFamily,
+    UntypedMetricFamily,
+)
+
 
 class TestCounter(unittest.TestCase):
     def setUp(self):
@@ -74,7 +85,7 @@ class TestGauge(unittest.TestCase):
         self.gauge.set(9)
         self.assertEqual(9, self.registry.get_sample_value('g'))
 
-    def test_function_decorator(self):
+    def test_inprogress_function_decorator(self):
         self.assertEqual(0, self.registry.get_sample_value('g'))
 
         @self.gauge.track_inprogress()
@@ -86,7 +97,7 @@ class TestGauge(unittest.TestCase):
         f()
         self.assertEqual(0, self.registry.get_sample_value('g'))
 
-    def test_block_decorator(self):
+    def test_inprogress_block_decorator(self):
         self.assertEqual(0, self.registry.get_sample_value('g'))
         with self.gauge.track_inprogress():
             self.assertEqual(1, self.registry.get_sample_value('g'))
@@ -101,7 +112,7 @@ class TestGauge(unittest.TestCase):
         x['a'] = None
         self.assertEqual(1, self.registry.get_sample_value('g'))
 
-    def test_function_decorator(self):
+    def test_time_function_decorator(self):
         self.assertEqual(0, self.registry.get_sample_value('g'))
 
         @self.gauge.time()
@@ -113,7 +124,7 @@ class TestGauge(unittest.TestCase):
         f()
         self.assertNotEqual(0, self.registry.get_sample_value('g'))
 
-    def test_block_decorator(self):
+    def test_time_block_decorator(self):
         self.assertEqual(0, self.registry.get_sample_value('g'))
         with self.gauge.time():
             time.sleep(.001)
@@ -349,7 +360,7 @@ class TestMetricFamilies(unittest.TestCase):
         cmf = GaugeMetricFamily('g', 'help', labels=['a'])
         cmf.add_metric(['b'], 2)
         self.custom_collector(cmf)
-        self.assertEqual(2, self.registry.get_sample_value('g', {'a':'b'}))
+        self.assertEqual(2, self.registry.get_sample_value('g', {'a': 'b'}))
 
     def test_summary(self):
         self.custom_collector(SummaryMetricFamily('s', 'help', count_value=1, sum_value=2))

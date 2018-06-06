@@ -24,6 +24,7 @@ except ImportError:
     from http.server import BaseHTTPRequestHandler
     from http.server import HTTPServer
 
+
 class TestGenerateText(unittest.TestCase):
     def setUp(self):
         self.registry = CollectorRegistry()
@@ -79,16 +80,20 @@ hh_sum 0.05
         self.assertEqual(b'# HELP cc A\\ncount\\\\er\n# TYPE cc counter\ncc{a="\\\\x\\n\\""} 1.0\n', generate_latest(self.registry))
 
     def test_nonnumber(self):
-        class MyNumber():
+
+        class MyNumber(object):
             def __repr__(self):
-              return "MyNumber(123)"
+                return "MyNumber(123)"
+
             def __float__(self):
-              return 123.0
-        class MyCollector():
+                return 123.0
+
+        class MyCollector(object):
             def collect(self):
                 metric = Metric("nonnumber", "Non number", 'untyped')
                 metric.add_sample("nonnumber", {}, MyNumber())
                 yield metric
+
         self.registry.register(MyCollector())
         self.assertEqual(b'# HELP nonnumber Non number\n# TYPE nonnumber untyped\nnonnumber 123.0\n', generate_latest(self.registry))
 
@@ -98,6 +103,7 @@ class TestPushGateway(unittest.TestCase):
         self.registry = CollectorRegistry()
         self.counter = Gauge('g', 'help', registry=self.registry)
         self.requests = requests = []
+
         class TestHandler(BaseHTTPRequestHandler):
             def do_PUT(self):
                 if 'with_basic_auth' in self.requestline and self.headers['authorization'] != 'Basic Zm9vOmJhcg==':
@@ -113,9 +119,11 @@ class TestPushGateway(unittest.TestCase):
 
         httpd = HTTPServer(('localhost', 0), TestHandler)
         self.address = 'http://localhost:{0}'.format(httpd.server_address[1])
+
         class TestServer(threading.Thread):
             def run(self):
                 httpd.handle_request()
+
         self.server = TestServer()
         self.server.daemon = True
         self.server.start()
@@ -172,6 +180,8 @@ class TestPushGateway(unittest.TestCase):
     def test_push_with_handler(self):
         def my_test_handler(url, method, timeout, headers, data):
             headers.append(['X-Test-Header', 'foobar'])
+            # Handler should be passed sane default timeout
+            self.assertEqual(timeout, 30)
             return default_handler(url, method, timeout, headers, data)
         push_to_gateway(self.address, "my_job", self.registry, handler=my_test_handler)
         self.assertEqual(self.requests[0][0].command, 'PUT')

@@ -9,26 +9,25 @@ import mmap
 import os
 import re
 import struct
+import sys
 import time
 import types
-
-try:
-    from BaseHTTPServer import BaseHTTPRequestHandler
-except ImportError:
-    # Python 3
-    unicode = str
 
 from threading import Lock
 from timeit import default_timer
 
-from decorator import decorate
+from .decorator import decorate
+
+
+if sys.version_info > (3,):
+    unicode = str
 
 _METRIC_NAME_RE = re.compile(r'^[a-zA-Z_:][a-zA-Z0-9_:]*$')
 _METRIC_LABEL_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 _RESERVED_METRIC_LABEL_NAME_RE = re.compile(r'^__.*$')
 _INF = float("inf")
 _MINUS_INF = float("-inf")
-_INITIAL_MMAP_SIZE = 1024*1024
+_INITIAL_MMAP_SIZE = 1 << 20
 
 
 class CollectorRegistry(object):
@@ -48,10 +47,11 @@ class CollectorRegistry(object):
         '''Add a collector to the registry.'''
         with self._lock:
             names = self._get_names(collector)
-            for name in names:
-                if name in self._names_to_collectors:
-                    raise ValueError('Timeseries already present '
-                            'in CollectorRegistry: ' + name)
+            duplicates = set(self._names_to_collectors).intersection(names)
+            if duplicates:
+                raise ValueError(
+                    'Duplicated timeseries in CollectorRegistry: {}'.format(
+                        duplicates))
             for name in names:
                 self._names_to_collectors[name] = collector
             self._collector_to_names[collector] = names
@@ -121,6 +121,7 @@ class CollectorRegistry(object):
                     m = Metric(metric.name, metric.documentation, metric.type)
                     m.samples = samples
                     metrics.append(m)
+
         class RestrictedRegistry(object):
             def collect(self):
                 return metrics
@@ -209,10 +210,10 @@ class CounterMetricFamily(Metric):
         if labels is not None and value is not None:
             raise ValueError('Can only specify at most one of value and labels.')
         if labels is None:
-          labels = []
+            labels = []
         self._labelnames = tuple(labels)
         if value is not None:
-          self.add_metric([], value)
+            self.add_metric([], value)
 
     def add_metric(self, labels, value):
         '''Add a metric to the metric family.
@@ -234,10 +235,10 @@ class GaugeMetricFamily(Metric):
         if labels is not None and value is not None:
             raise ValueError('Can only specify at most one of value and labels.')
         if labels is None:
-          labels = []
+            labels = []
         self._labelnames = tuple(labels)
         if value is not None:
-          self.add_metric([], value)
+            self.add_metric([], value)
 
     def add_metric(self, labels, value):
         '''Add a metric to the metric family.
@@ -261,10 +262,10 @@ class SummaryMetricFamily(Metric):
         if labels is not None and count_value is not None:
             raise ValueError('Can only specify at most one of value and labels.')
         if labels is None:
-          labels = []
+            labels = []
         self._labelnames = tuple(labels)
         if count_value is not None:
-          self.add_metric([], count_value, sum_value)
+            self.add_metric([], count_value, sum_value)
 
     def add_metric(self, labels, count_value, sum_value):
         '''Add a metric to the metric family.
@@ -290,10 +291,10 @@ class HistogramMetricFamily(Metric):
         if labels is not None and buckets is not None:
             raise ValueError('Can only specify at most one of buckets and labels.')
         if labels is None:
-          labels = []
+            labels = []
         self._labelnames = tuple(labels)
         if buckets is not None:
-          self.add_metric([], buckets, sum_value)
+            self.add_metric([], buckets, sum_value)
 
     def add_metric(self, labels, buckets, sum_value):
         '''Add a metric to the metric family.
@@ -305,7 +306,7 @@ class HistogramMetricFamily(Metric):
           sum_value: The sum value of the metric.
         '''
         for bucket, value in buckets:
-          self.samples.append((self.name + '_bucket', dict(list(zip(self._labelnames, labels)) + [('le', bucket)]), value))
+            self.samples.append((self.name + '_bucket', dict(list(zip(self._labelnames, labels)) + [('le', bucket)]), value))
         # +Inf is last and provides the count value.
         self.samples.append((self.name + '_count', dict(zip(self._labelnames, labels)), buckets[-1][1]))
         self.samples.append((self.name + '_sum', dict(zip(self._labelnames, labels)), sum_value))
@@ -317,20 +318,20 @@ class _MutexValue(object):
     _multiprocess = False
 
     def __init__(self, typ, metric_name, name, labelnames, labelvalues, **kwargs):
-      self._value = 0.0
-      self._lock = Lock()
+        self._value = 0.0
+        self._lock = Lock()
 
     def inc(self, amount):
-      with self._lock:
-          self._value += amount
+        with self._lock:
+            self._value += amount
 
     def set(self, value):
-      with self._lock:
-          self._value = value
+        with self._lock:
+            self._value = value
 
     def get(self):
-      with self._lock:
-          return self._value
+        with self._lock:
+            return self._value
 
 
 class _MmapedDict(object):
@@ -344,7 +345,7 @@ class _MmapedDict(object):
 
     Not thread safe.
     """
-    def __init__(self, filename):
+    def __init__(self, filename, read_mode=False):
         self._f = open(filename, 'a+b')
         if os.fstat(self._f.fileno()).st_size == 0:
             self._f.truncate(_INITIAL_MMAP_SIZE)
@@ -357,8 +358,9 @@ class _MmapedDict(object):
             self._used = 8
             struct.pack_into(b'i', self._m, 0, self._used)
         else:
-            for key, _, pos in self._read_all_values():
-                self._positions[key] = pos
+            if not read_mode:
+                for key, _, pos in self._read_all_values():
+                    self._positions[key] = pos
 
     def _init_value(self, key):
         """Initialize a value. Lock must be held by caller."""
@@ -435,16 +437,16 @@ def _MultiProcessValue(_pidFunc=os.getpid):
                 self.__reset()
                 values.append(self)
 
-
         def __reset(self):
             typ, metric_name, name, labelnames, labelvalues, multiprocess_mode = self._params
             if typ == 'gauge':
-                file_prefix = typ + '_' +  multiprocess_mode
+                file_prefix = typ + '_' + multiprocess_mode
             else:
                 file_prefix = typ
             if file_prefix not in files:
                 filename = os.path.join(
-                        os.environ['prometheus_multiproc_dir'], '{0}_{1}.db'.format(file_prefix, pid['value']))
+                    os.environ['prometheus_multiproc_dir'],
+                    '{0}_{1}.db'.format(file_prefix, pid['value']))
                 files[file_prefix] = _MmapedDict(filename)
             self._file = files[file_prefix]
             self._key = json.dumps((metric_name, name, labelnames, labelvalues))
@@ -535,11 +537,11 @@ class _LabelWrapper(object):
         if labelkwargs:
             if sorted(labelkwargs) != sorted(self._labelnames):
                 raise ValueError('Incorrect label names')
-            labelvalues = tuple([unicode(labelkwargs[l]) for l in self._labelnames])
+            labelvalues = tuple(unicode(labelkwargs[l]) for l in self._labelnames)
         else:
             if len(labelvalues) != len(self._labelnames):
                 raise ValueError('Incorrect label count')
-            labelvalues = tuple([unicode(l) for l in labelvalues])
+            labelvalues = tuple(unicode(l) for l in labelvalues)
         with self._lock:
             if labelvalues not in self._metrics:
                 self._metrics[labelvalues] = self._wrappedClass(self._name, self._labelnames, labelvalues, **self._kwargs)
@@ -549,7 +551,7 @@ class _LabelWrapper(object):
         '''Remove the given labelset from the metric.'''
         if len(labelvalues) != len(self._labelnames):
             raise ValueError('Incorrect label count')
-        labelvalues = tuple([unicode(l) for l in labelvalues])
+        labelvalues = tuple(unicode(l) for l in labelvalues)
         with self._lock:
             del self._metrics[labelvalues]
 
@@ -557,7 +559,7 @@ class _LabelWrapper(object):
         with self._lock:
             metrics = self._metrics.copy()
         for labels, metric in metrics.items():
-            series_labels = list(dict(zip(self._labelnames, labels)).items())
+            series_labels = list(zip(self._labelnames, labels))
             for suffix, sample_labels, value in metric._samples():
                 yield (suffix, dict(series_labels + list(sample_labels.items())), value)
 
@@ -710,8 +712,9 @@ class Gauge(object):
         if (_ValueClass._multiprocess
                 and multiprocess_mode not in ['min', 'max', 'livesum', 'liveall', 'all']):
             raise ValueError('Invalid multiprocess mode: ' + multiprocess_mode)
-        self._value = _ValueClass(self._type, name, name, labelnames,
-                labelvalues, multiprocess_mode=multiprocess_mode)
+        self._value = _ValueClass(
+            self._type, name, name, labelnames, labelvalues,
+            multiprocess_mode=multiprocess_mode)
 
     def inc(self, amount=1):
         '''Increment gauge by the given amount.'''
@@ -882,7 +885,7 @@ class Histogram(object):
         self._buckets = []
         bucket_labelnames = labelnames + ('le',)
         for b in buckets:
-          self._buckets.append(_ValueClass(self._type, name, name + '_bucket', bucket_labelnames, labelvalues + (_floatToGoString(b),)))
+            self._buckets.append(_ValueClass(self._type, name, name + '_bucket', bucket_labelnames, labelvalues + (_floatToGoString(b),)))
 
     def observe(self, amount):
         '''Observe the given amount.'''
