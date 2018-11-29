@@ -3,26 +3,19 @@ from __future__ import unicode_literals
 import math
 import sys
 
+from prometheus_client.core import (
+    CollectorRegistry, CounterMetricFamily, GaugeMetricFamily,
+    HistogramMetricFamily, Metric, Sample, SummaryMetricFamily,
+)
+from prometheus_client.exposition import generate_latest
+from prometheus_client.parser import text_string_to_metric_families
+
 if sys.version_info < (2, 7):
     # We need the skip decorators from unittest2 on Python 2.6.
     import unittest2 as unittest
 else:
     import unittest
 
-from prometheus_client.core import (
-    CollectorRegistry,
-    CounterMetricFamily,
-    GaugeMetricFamily,
-    HistogramMetricFamily,
-    Metric,
-    SummaryMetricFamily,
-)
-from prometheus_client.exposition import (
-    generate_latest,
-)
-from prometheus_client.parser import (
-    text_string_to_metric_families,
-)
 
 
 class TestParse(unittest.TestCase):
@@ -47,6 +40,8 @@ a 1
 a_count 1
 a_sum 2
 """)
+        summary = SummaryMetricFamily("a", "help", count_value=1, sum_value=2)
+        self.assertEqual([summary], list(families))
 
     def test_summary_quantiles(self):
         families = text_string_to_metric_families("""# TYPE a summary
@@ -87,8 +82,8 @@ redis_connected_clients{instance="rough-snowflake-web",port="6381"} 12.0
 """)
         m = Metric("redis_connected_clients", "Redis connected clients", "untyped")
         m.samples = [
-            ("redis_connected_clients", {"instance": "rough-snowflake-web", "port": "6380"}, 10),
-            ("redis_connected_clients", {"instance": "rough-snowflake-web", "port": "6381"}, 12),
+            Sample("redis_connected_clients", {"instance": "rough-snowflake-web", "port": "6380"}, 10),
+            Sample("redis_connected_clients", {"instance": "rough-snowflake-web", "port": "6381"}, 12),
         ]
         self.assertEqual([m], list(families))
 
@@ -117,6 +112,15 @@ a\t1
 """)
         self.assertEqual([CounterMetricFamily("a", "help", value=1)], list(families))
 
+    def test_labels_with_curly_braces(self):
+        families = text_string_to_metric_families("""# TYPE a counter
+# HELP a help
+a{foo="bar", bar="b{a}z"} 1
+""")
+        metric_family = CounterMetricFamily("a", "help", labels=["foo", "bar"])
+        metric_family.add_metric(["bar", "b{a}z"], 1)
+        self.assertEqual([metric_family], list(families))
+
     def test_empty_help(self):
         families = text_string_to_metric_families("""# TYPE a counter
 # HELP a
@@ -140,24 +144,48 @@ a{foo="baz"} -Inf
 # HELP a help
 a{ foo = "bar" } 1
 a\t\t{\t\tfoo\t\t=\t\t"baz"\t\t}\t\t2
+a   {    foo   =  "buz"   }    3
+a\t {  \t foo\t = "biz"\t  } \t 4
+a \t{\t foo   = "boz"\t}\t 5
 """)
         metric_family = CounterMetricFamily("a", "help", labels=["foo"])
         metric_family.add_metric(["bar"], 1)
         metric_family.add_metric(["baz"], 2)
+        metric_family.add_metric(["buz"], 3)
+        metric_family.add_metric(["biz"], 4)
+        metric_family.add_metric(["boz"], 5)
         self.assertEqual([metric_family], list(families))
 
     def test_commas(self):
         families = text_string_to_metric_families("""# TYPE a counter
 # HELP a help
 a{foo="bar",} 1
+a{foo="baz",  } 1
 # TYPE b counter
 # HELP b help
 b{,} 2
+# TYPE c counter
+# HELP c help
+c{  ,} 3
+# TYPE d counter
+# HELP d help
+d{,  } 4
 """)
         a = CounterMetricFamily("a", "help", labels=["foo"])
         a.add_metric(["bar"], 1)
+        a.add_metric(["baz"], 1)
         b = CounterMetricFamily("b", "help", value=2)
-        self.assertEqual([a, b], list(families))
+        c = CounterMetricFamily("c", "help", value=3)
+        d = CounterMetricFamily("d", "help", value=4)
+        self.assertEqual([a, b, c, d], list(families))
+
+    def test_multiple_trailing_commas(self):
+        text = """# TYPE a counter
+# HELP a help
+a{foo="bar",, } 1
+"""
+        self.assertRaises(ValueError,
+                          lambda: list(text_string_to_metric_families(text)))
 
     def test_empty_brackets(self):
         families = text_string_to_metric_families("""# TYPE a counter
@@ -171,6 +199,61 @@ a{} 1
 """)
         # Can't use a simple comparison as nan != nan.
         self.assertTrue(math.isnan(list(families)[0].samples[0][2]))
+
+    def test_empty_label(self):
+        families = text_string_to_metric_families("""# TYPE a counter
+# HELP a help
+a{foo="bar"} 1
+a{foo=""} 2
+""")
+        metric_family = CounterMetricFamily("a", "help", labels=["foo"])
+        metric_family.add_metric(["bar"], 1)
+        metric_family.add_metric([""], 2)
+        self.assertEqual([metric_family], list(families))
+
+    def test_label_escaping(self):
+        for escaped_val, unescaped_val in [
+                ('foo', 'foo'),
+                ('\\foo', '\\foo'),
+                ('\\\\foo', '\\foo'),
+                ('foo\\\\', 'foo\\'),
+                ('\\\\', '\\'),
+                ('\\n', '\n'),
+                ('\\\\n', '\\n'),
+                ('\\\\\\n', '\\\n'),
+                ('\\"', '"'),
+                ('\\\\\\"', '\\"')]:
+            families = list(text_string_to_metric_families("""
+# TYPE a counter
+# HELP a help
+a{foo="%s",bar="baz"} 1
+""" % escaped_val))
+            metric_family = CounterMetricFamily(
+                "a", "help", labels=["foo", "bar"])
+            metric_family.add_metric([unescaped_val, "baz"], 1)
+            self.assertEqual([metric_family], list(families))
+
+    def test_help_escaping(self):
+        for escaped_val, unescaped_val in [
+                ('foo', 'foo'),
+                ('\\foo', '\\foo'),
+                ('\\\\foo', '\\foo'),
+                ('foo\\', 'foo\\'),
+                ('foo\\\\', 'foo\\'),
+                ('\\n', '\n'),
+                ('\\\\n', '\\n'),
+                ('\\\\\\n', '\\\n'),
+                ('\\"', '\\"'),
+                ('\\\\"', '\\"'),
+                ('\\\\\\"', '\\\\"')]:
+            families = list(text_string_to_metric_families("""
+# TYPE a counter
+# HELP a %s
+a{foo="bar"} 1
+""" % escaped_val))
+            metric_family = CounterMetricFamily("a", unescaped_val, labels=["foo"])
+            metric_family.add_metric(["bar"], 1)
+            self.assertEqual([metric_family], list(families))
 
     def test_escaping(self):
         families = text_string_to_metric_families("""# TYPE a counter

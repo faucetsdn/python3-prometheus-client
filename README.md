@@ -67,10 +67,15 @@ Counters go up, and reset when the process restarts.
 
 ```python
 from prometheus_client import Counter
-c = Counter('my_failures_total', 'Description of counter')
+c = Counter('my_failures', 'Description of counter')
 c.inc()     # Increment by 1
 c.inc(1.6)  # Increment by given value
 ```
+
+If there is a suffix of `_total` on the metric name, it will be removed. When
+exposing the time series for counter, a `_total` suffix will be added. This is
+for compatibility between OpenMetrics and the Prometheus text format, as OpenMetrics
+requires the `_total` suffix.
 
 There are utilities to count exceptions raised:
 
@@ -167,6 +172,27 @@ def f():
 
 with h.time():
   pass
+```
+
+### Info
+
+Info tracks key-value information, usually about a whole target.
+
+```python
+from prometheus_client import Info
+i = Info('my_build_version', 'Description of info')
+i.info({'version': '1.2.3', 'buildhost': 'foo@bar'})
+```
+
+### Enum
+
+Enum tracks which of a set of states something is currently in.
+
+```python
+from prometheus_client import Enum
+e = Enum('my_task_state', 'Description of enum',
+        states=['starting', 'running', 'stopped'])
+e.state('running')
 ```
 
 ### Labels
@@ -279,6 +305,36 @@ from prometheus_client import start_wsgi_server
 
 start_wsgi_server(8000)
 ```
+
+#### Flask
+
+To use Prometheus with [Flask](http://flask.pocoo.org/) we need to serve metrics through a Prometheus WSGI application. This can be achieved using [Flask's application dispatching](http://flask.pocoo.org/docs/latest/patterns/appdispatch/). Below is a working example.
+
+Save the snippet below in a `myapp.py` file
+
+```python
+from flask import Flask
+from werkzeug.wsgi import DispatcherMiddleware
+from prometheus_client import make_wsgi_app
+
+# Create my app
+app = Flask(__name__)
+
+# Add prometheus wsgi middleware to route /metrics requests
+app_dispatch = DispatcherMiddleware(app, {
+    '/metrics': make_wsgi_app()
+})
+```
+
+Run the example web application like this
+
+```bash
+# Install uwsgi if you do not have it
+pip install uwsgi
+uwsgi --http 127.0.0.1:8000 --wsgi-file myapp.py --callable app_dispatch
+```
+
+Visit http://localhost:8000/metrics to see the metrics
 
 ### Node exporter textfile collector
 
@@ -414,6 +470,7 @@ This comes with a number of limitations:
 
 - Registries can not be used as normal, all instantiated metrics are exported
 - Custom collectors do not work (e.g. cpu and memory metrics)
+- Info and Enum metrics do not work
 - The pushgateway cannot be used
 - Gauges cannot use the `pid` label
 

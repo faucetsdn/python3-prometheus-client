@@ -2,6 +2,7 @@
 
 from __future__ import unicode_literals
 
+from collections import namedtuple
 import copy
 import json
 import math
@@ -10,14 +11,12 @@ import os
 import re
 import struct
 import sys
+from threading import Lock
 import time
+from timeit import default_timer
 import types
 
-from threading import Lock
-from timeit import default_timer
-
 from .decorator import decorate
-
 
 if sys.version_info > (3,):
     unicode = str
@@ -29,6 +28,53 @@ _INF = float("inf")
 _MINUS_INF = float("-inf")
 _INITIAL_MMAP_SIZE = 1 << 20
 
+_pack_integer_func = struct.Struct(b'i').pack
+_pack_double_func = struct.Struct(b'd').pack
+_unpack_integer = struct.Struct(b'i').unpack_from
+_unpack_double = struct.Struct(b'd').unpack_from
+
+# Timestamp and exemplar are optional.
+# Value can be an int or a float.
+# Timestamp can be a float containing a unixtime in seconds,
+# a Timestamp object, or None.
+# Exemplar can be an Exemplar object, or None.
+Sample = namedtuple('Sample', ['name', 'labels', 'value', 'timestamp', 'exemplar'])
+Sample.__new__.__defaults__ = (None, None)
+
+
+class Timestamp(object):
+    '''A nanosecond-resolution timestamp.'''
+
+    def __init__(self, sec, nsec):
+        if nsec < 0 or nsec >= 1e9:
+            raise ValueError("Invalid value for nanoseconds in Timestamp: {}".format(nsec))
+        if sec < 0:
+            nsec = -nsec
+        self.sec = int(sec)
+        self.nsec = int(nsec)
+
+    def __str__(self):
+        return "{0}.{1:09d}".format(self.sec, self.nsec)
+
+    def __repr__(self):
+        return "Timestamp({0}, {1})".format(self.sec, self.nsec)
+
+    def __float__(self):
+        return float(self.sec) + float(self.nsec) / 1e9
+
+    def __eq__(self, other):
+        return type(self) == type(other) and self.sec == other.sec and self.nsec == other.nsec
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __gt__(self, other):
+        return self.sec > other.sec or self.nsec > other.nsec
+
+
+Exemplar = namedtuple('Exemplar', ['labels', 'value', 'timestamp'])
+Exemplar.__new__.__defaults__ = (None,)
+
 
 class CollectorRegistry(object):
     '''Metric collector registry.
@@ -37,6 +83,7 @@ class CollectorRegistry(object):
     Metric objects. The returned metrics should be consistent with the Prometheus
     exposition formats.
     '''
+
     def __init__(self, auto_describe=False):
         self._collector_to_names = {}
         self._names_to_collectors = {}
@@ -50,7 +97,7 @@ class CollectorRegistry(object):
             duplicates = set(self._names_to_collectors).intersection(names)
             if duplicates:
                 raise ValueError(
-                    'Duplicated timeseries in CollectorRegistry: {}'.format(
+                    'Duplicated timeseries in CollectorRegistry: {0}'.format(
                         duplicates))
             for name in names:
                 self._names_to_collectors[name] = collector
@@ -80,8 +127,11 @@ class CollectorRegistry(object):
 
         result = []
         type_suffixes = {
-            'summary': ['', '_sum', '_count'],
-            'histogram': ['_bucket', '_sum', '_count']
+            'counter': ['_total', '_created'],
+            'summary': ['', '_sum', '_count', '_created'],
+            'histogram': ['_bucket', '_sum', '_count', '_created'],
+            'gaugehistogram': ['_bucket', '_gsum', '_gcount'],
+            'info': ['_info'],
         }
         for metric in desc_func():
             for suffix in type_suffixes.get(metric.type, ['']):
@@ -125,6 +175,7 @@ class CollectorRegistry(object):
         class RestrictedRegistry(object):
             def collect(self):
                 return metrics
+
         return RestrictedRegistry()
 
     def get_sample_value(self, name, labels=None):
@@ -135,16 +186,19 @@ class CollectorRegistry(object):
         if labels is None:
             labels = {}
         for metric in self.collect():
-            for n, l, value in metric.samples:
-                if n == name and l == labels:
-                    return value
+            for s in metric.samples:
+                if s.name == name and s.labels == labels:
+                    return s.value
         return None
 
 
 REGISTRY = CollectorRegistry(auto_describe=True)
 '''The default registry.'''
 
-_METRIC_TYPES = ('counter', 'gauge', 'summary', 'histogram', 'untyped')
+_METRIC_TYPES = (
+    'counter', 'gauge', 'summary', 'histogram',
+    'gaugehistogram', 'unknown', 'info', 'stateset',
+)
 
 
 class Metric(object):
@@ -155,34 +209,53 @@ class Metric(object):
     Custom collectors should use GaugeMetricFamily, CounterMetricFamily
     and SummaryMetricFamily instead.
     '''
-    def __init__(self, name, documentation, typ):
+
+    def __init__(self, name, documentation, typ, unit=''):
+        if unit and not name.endswith("_" + unit):
+            name += "_" + unit
+        if not _METRIC_NAME_RE.match(name):
+            raise ValueError('Invalid metric name: ' + name)
         self.name = name
         self.documentation = documentation
+        self.unit = unit
+        if typ == 'untyped':
+            typ = 'unknown'
         if typ not in _METRIC_TYPES:
             raise ValueError('Invalid metric type: ' + typ)
         self.type = typ
         self.samples = []
 
-    def add_sample(self, name, labels, value):
+    def add_sample(self, name, labels, value, timestamp=None, exemplar=None):
         '''Add a sample to the metric.
 
         Internal-only, do not use.'''
-        self.samples.append((name, labels, value))
+        self.samples.append(Sample(name, labels, value, timestamp, exemplar))
 
     def __eq__(self, other):
-        return (isinstance(other, Metric)
-                and self.name == other.name
-                and self.documentation == other.documentation
-                and self.type == other.type
-                and self.samples == other.samples)
+        return (isinstance(other, Metric) and
+                self.name == other.name and
+                self.documentation == other.documentation and
+                self.type == other.type and
+                self.unit == other.unit and
+                self.samples == other.samples)
+
+    def __repr__(self):
+        return "Metric(%s, %s, %s, %s, %s)" % (
+            self.name,
+            self.documentation,
+            self.type,
+            self.unit,
+            self.samples,
+        )
 
 
-class UntypedMetricFamily(Metric):
-    '''A single untyped metric and its samples.
+class UnknownMetricFamily(Metric):
+    '''A single unknwon metric and its samples.
     For use by custom collectors.
     '''
-    def __init__(self, name, documentation, value=None, labels=None):
-        Metric.__init__(self, name, documentation, 'untyped')
+
+    def __init__(self, name, documentation, value=None, labels=None, unit=''):
+        Metric.__init__(self, name, documentation, 'unknown', unit)
         if labels is not None and value is not None:
             raise ValueError('Can only specify at most one of value and labels.')
         if labels is None:
@@ -191,13 +264,17 @@ class UntypedMetricFamily(Metric):
         if value is not None:
             self.add_metric([], value)
 
-    def add_metric(self, labels, value):
+    def add_metric(self, labels, value, timestamp=None):
         '''Add a metric to the metric family.
         Args:
         labels: A list of label values
         value: The value of the metric.
         '''
-        self.samples.append((self.name, dict(zip(self._labelnames, labels)), value))
+        self.samples.append(Sample(self.name, dict(zip(self._labelnames, labels)), value, timestamp))
+
+
+# For backward compatibility.
+UntypedMetricFamily = UnknownMetricFamily
 
 
 class CounterMetricFamily(Metric):
@@ -205,24 +282,31 @@ class CounterMetricFamily(Metric):
 
     For use by custom collectors.
     '''
-    def __init__(self, name, documentation, value=None, labels=None):
-        Metric.__init__(self, name, documentation, 'counter')
+
+    def __init__(self, name, documentation, value=None, labels=None, created=None, unit=''):
+        # Glue code for pre-OpenMetrics metrics.
+        if name.endswith('_total'):
+            name = name[:-6]
+        Metric.__init__(self, name, documentation, 'counter', unit)
         if labels is not None and value is not None:
             raise ValueError('Can only specify at most one of value and labels.')
         if labels is None:
             labels = []
         self._labelnames = tuple(labels)
         if value is not None:
-            self.add_metric([], value)
+            self.add_metric([], value, created)
 
-    def add_metric(self, labels, value):
+    def add_metric(self, labels, value, created=None, timestamp=None):
         '''Add a metric to the metric family.
 
         Args:
           labels: A list of label values
-          value: The value of the metric.
+          value: The value of the metric
+          created: Optional unix timestamp the child was created at.
         '''
-        self.samples.append((self.name, dict(zip(self._labelnames, labels)), value))
+        self.samples.append(Sample(self.name + '_total', dict(zip(self._labelnames, labels)), value, timestamp))
+        if created is not None:
+            self.samples.append(Sample(self.name + '_created', dict(zip(self._labelnames, labels)), created, timestamp))
 
 
 class GaugeMetricFamily(Metric):
@@ -230,8 +314,9 @@ class GaugeMetricFamily(Metric):
 
     For use by custom collectors.
     '''
-    def __init__(self, name, documentation, value=None, labels=None):
-        Metric.__init__(self, name, documentation, 'gauge')
+
+    def __init__(self, name, documentation, value=None, labels=None, unit=''):
+        Metric.__init__(self, name, documentation, 'gauge', unit)
         if labels is not None and value is not None:
             raise ValueError('Can only specify at most one of value and labels.')
         if labels is None:
@@ -240,14 +325,14 @@ class GaugeMetricFamily(Metric):
         if value is not None:
             self.add_metric([], value)
 
-    def add_metric(self, labels, value):
+    def add_metric(self, labels, value, timestamp=None):
         '''Add a metric to the metric family.
 
         Args:
           labels: A list of label values
           value: A float
         '''
-        self.samples.append((self.name, dict(zip(self._labelnames, labels)), value))
+        self.samples.append(Sample(self.name, dict(zip(self._labelnames, labels)), value, timestamp))
 
 
 class SummaryMetricFamily(Metric):
@@ -255,8 +340,9 @@ class SummaryMetricFamily(Metric):
 
     For use by custom collectors.
     '''
-    def __init__(self, name, documentation, count_value=None, sum_value=None, labels=None):
-        Metric.__init__(self, name, documentation, 'summary')
+
+    def __init__(self, name, documentation, count_value=None, sum_value=None, labels=None, unit=''):
+        Metric.__init__(self, name, documentation, 'summary', unit)
         if (sum_value is None) != (count_value is None):
             raise ValueError('count_value and sum_value must be provided together.')
         if labels is not None and count_value is not None:
@@ -267,7 +353,7 @@ class SummaryMetricFamily(Metric):
         if count_value is not None:
             self.add_metric([], count_value, sum_value)
 
-    def add_metric(self, labels, count_value, sum_value):
+    def add_metric(self, labels, count_value, sum_value, timestamp=None):
         '''Add a metric to the metric family.
 
         Args:
@@ -275,8 +361,8 @@ class SummaryMetricFamily(Metric):
           count_value: The count value of the metric.
           sum_value: The sum value of the metric.
         '''
-        self.samples.append((self.name + '_count', dict(zip(self._labelnames, labels)), count_value))
-        self.samples.append((self.name + '_sum', dict(zip(self._labelnames, labels)), sum_value))
+        self.samples.append(Sample(self.name + '_count', dict(zip(self._labelnames, labels)), count_value, timestamp))
+        self.samples.append(Sample(self.name + '_sum', dict(zip(self._labelnames, labels)), sum_value, timestamp))
 
 
 class HistogramMetricFamily(Metric):
@@ -284,8 +370,9 @@ class HistogramMetricFamily(Metric):
 
     For use by custom collectors.
     '''
-    def __init__(self, name, documentation, buckets=None, sum_value=None, labels=None):
-        Metric.__init__(self, name, documentation, 'histogram')
+
+    def __init__(self, name, documentation, buckets=None, sum_value=None, labels=None, unit=''):
+        Metric.__init__(self, name, documentation, 'histogram', unit)
         if (sum_value is None) != (buckets is None):
             raise ValueError('buckets and sum_value must be provided together.')
         if labels is not None and buckets is not None:
@@ -296,20 +383,136 @@ class HistogramMetricFamily(Metric):
         if buckets is not None:
             self.add_metric([], buckets, sum_value)
 
-    def add_metric(self, labels, buckets, sum_value):
+    def add_metric(self, labels, buckets, sum_value, timestamp=None):
+        '''Add a metric to the metric family.
+
+        Args:
+          labels: A list of label values
+          buckets: A list of lists.
+              Each inner list can be a pair of bucket name and value,
+              or a triple of bucket name, value, and exemplar.
+              The buckets must be sorted, and +Inf present.
+          sum_value: The sum value of the metric.
+        '''
+        for b in buckets:
+            bucket, value = b[:2]
+            exemplar = None
+            if len(b) == 3:
+                exemplar = b[2]
+            self.samples.append(Sample(
+                self.name + '_bucket',
+                dict(list(zip(self._labelnames, labels)) + [('le', bucket)]),
+                value,
+                timestamp,
+                exemplar,
+            ))
+        # +Inf is last and provides the count value.
+        self.samples.extend([
+            Sample(self.name + '_count', dict(zip(self._labelnames, labels)), buckets[-1][1], timestamp),
+            Sample(self.name + '_sum', dict(zip(self._labelnames, labels)), sum_value, timestamp),
+        ])
+
+
+class GaugeHistogramMetricFamily(Metric):
+    '''A single gauge histogram and its samples.
+
+    For use by custom collectors.
+    '''
+
+    def __init__(self, name, documentation, buckets=None, gsum_value=None, labels=None, unit=''):
+        Metric.__init__(self, name, documentation, 'gaugehistogram', unit)
+        if labels is not None and buckets is not None:
+            raise ValueError('Can only specify at most one of buckets and labels.')
+        if labels is None:
+            labels = []
+        self._labelnames = tuple(labels)
+        if buckets is not None:
+            self.add_metric([], buckets, gsum_value)
+
+    def add_metric(self, labels, buckets, gsum_value, timestamp=None):
         '''Add a metric to the metric family.
 
         Args:
           labels: A list of label values
           buckets: A list of pairs of bucket names and values.
               The buckets must be sorted, and +Inf present.
-          sum_value: The sum value of the metric.
+          gsum_value: The sum value of the metric.
         '''
         for bucket, value in buckets:
-            self.samples.append((self.name + '_bucket', dict(list(zip(self._labelnames, labels)) + [('le', bucket)]), value))
+            self.samples.append(Sample(
+                self.name + '_bucket',
+                dict(list(zip(self._labelnames, labels)) + [('le', bucket)]),
+                value, timestamp))
         # +Inf is last and provides the count value.
-        self.samples.append((self.name + '_count', dict(zip(self._labelnames, labels)), buckets[-1][1]))
-        self.samples.append((self.name + '_sum', dict(zip(self._labelnames, labels)), sum_value))
+        self.samples.extend([
+            Sample(self.name + '_gcount', dict(zip(self._labelnames, labels)), buckets[-1][1], timestamp),
+            Sample(self.name + '_gsum', dict(zip(self._labelnames, labels)), gsum_value, timestamp),
+        ])
+
+
+class InfoMetricFamily(Metric):
+    '''A single info and its samples.
+
+    For use by custom collectors.
+    '''
+
+    def __init__(self, name, documentation, value=None, labels=None):
+        Metric.__init__(self, name, documentation, 'info')
+        if labels is not None and value is not None:
+            raise ValueError('Can only specify at most one of value and labels.')
+        if labels is None:
+            labels = []
+        self._labelnames = tuple(labels)
+        if value is not None:
+            self.add_metric([], value)
+
+    def add_metric(self, labels, value, timestamp=None):
+        '''Add a metric to the metric family.
+
+        Args:
+          labels: A list of label values
+          value: A dict of labels
+        '''
+        self.samples.append(Sample(
+            self.name + '_info',
+            dict(dict(zip(self._labelnames, labels)), **value),
+            1,
+            timestamp,
+        ))
+
+
+class StateSetMetricFamily(Metric):
+    '''A single stateset and its samples.
+
+    For use by custom collectors.
+    '''
+
+    def __init__(self, name, documentation, value=None, labels=None):
+        Metric.__init__(self, name, documentation, 'stateset')
+        if labels is not None and value is not None:
+            raise ValueError('Can only specify at most one of value and labels.')
+        if labels is None:
+            labels = []
+        self._labelnames = tuple(labels)
+        if value is not None:
+            self.add_metric([], value)
+
+    def add_metric(self, labels, value, timestamp=None):
+        '''Add a metric to the metric family.
+
+        Args:
+          labels: A list of label values
+          value: A dict of string state names to booleans
+        '''
+        labels = tuple(labels)
+        for state, enabled in sorted(value.items()):
+            v = (1 if enabled else 0)
+            self.samples.append(Sample(
+                self.name,
+                dict(zip(self._labelnames + (self.name,), labels + (state,))),
+                v,
+                timestamp,
+            ))
 
 
 class _MutexValue(object):
@@ -334,6 +537,17 @@ class _MutexValue(object):
             return self._value
 
 
+# struct.pack_into has atomicity issues because it will temporarily write 0 into
+# the mmap, resulting in false reads to 0 when experiencing a lot of writes.
+# Using direct assignment solves this issue.
+def _pack_double(data, pos, value):
+    data[pos:pos + 8] = _pack_double_func(value)
+
+
+def _pack_integer(data, pos, value):
+    data[pos:pos + 4] = _pack_integer_func(value)
+
+
 class _MmapedDict(object):
     """A dict of doubles, backed by an mmapped file.
 
@@ -345,18 +559,19 @@ class _MmapedDict(object):
 
     Not thread safe.
     """
+
     def __init__(self, filename, read_mode=False):
-        self._f = open(filename, 'a+b')
+        self._f = open(filename, 'rb' if read_mode else 'a+b')
         if os.fstat(self._f.fileno()).st_size == 0:
             self._f.truncate(_INITIAL_MMAP_SIZE)
         self._capacity = os.fstat(self._f.fileno()).st_size
-        self._m = mmap.mmap(self._f.fileno(), self._capacity)
+        self._m = mmap.mmap(self._f.fileno(), self._capacity, access=mmap.ACCESS_READ if read_mode else mmap.ACCESS_WRITE)
 
         self._positions = {}
-        self._used = struct.unpack_from(b'i', self._m, 0)[0]
+        self._used = _unpack_integer(self._m, 0)[0]
         if self._used == 0:
             self._used = 8
-            struct.pack_into(b'i', self._m, 0, self._used)
+            _pack_integer(self._m, 0, self._used)
         else:
             if not read_mode:
                 for key, _, pos in self._read_all_values():
@@ -376,19 +591,27 @@ class _MmapedDict(object):
 
         # Update how much space we've used.
         self._used += len(value)
-        struct.pack_into(b'i', self._m, 0, self._used)
+        _pack_integer(self._m, 0, self._used)
         self._positions[key] = self._used - 8
 
     def _read_all_values(self):
         """Yield (key, value, pos). No locking is performed."""
+
         pos = 8
-        while pos < self._used:
-            encoded_len = struct.unpack_from(b'i', self._m, pos)[0]
+
+        # cache variables to local ones and prevent attributes lookup
+        # on every loop iteration
+        used = self._used
+        data = self._m
+        unpack_from = struct.unpack_from
+
+        while pos < used:
+            encoded_len = _unpack_integer(data, pos)[0]
             pos += 4
-            encoded = struct.unpack_from('{0}s'.format(encoded_len).encode(), self._m, pos)[0]
+            encoded = unpack_from(('%ss' % encoded_len).encode(), data, pos)[0]
             padded_len = encoded_len + (8 - (encoded_len + 4) % 8)
             pos += padded_len
-            value = struct.unpack_from(b'd', self._m, pos)[0]
+            value = _unpack_double(data, pos)[0]
             yield encoded.decode('utf-8'), value, pos
             pos += 8
 
@@ -402,19 +625,28 @@ class _MmapedDict(object):
             self._init_value(key)
         pos = self._positions[key]
         # We assume that reading from an 8 byte aligned value is atomic
-        return struct.unpack_from(b'd', self._m, pos)[0]
+        return _unpack_double(self._m, pos)[0]
 
     def write_value(self, key, value):
         if key not in self._positions:
             self._init_value(key)
         pos = self._positions[key]
         # We assume that writing to an 8 byte aligned value is atomic
-        struct.pack_into(b'd', self._m, pos, value)
+        _pack_double(self._m, pos, value)
 
     def close(self):
         if self._f:
+            self._m.close()
+            self._m = None
             self._f.close()
             self._f = None
+
+
+def _mmap_key(metric_name, name, labelnames, labelvalues):
+    """Format a key for use in the mmap file."""
+    # ensure labels are in consistent order for identity
+    labels = dict(zip(labelnames, labelvalues))
+    return json.dumps([metric_name, name, labels], sort_keys=True)
 
 
 def _MultiProcessValue(_pidFunc=os.getpid):
@@ -449,7 +681,7 @@ def _MultiProcessValue(_pidFunc=os.getpid):
                     '{0}_{1}.db'.format(file_prefix, pid['value']))
                 files[file_prefix] = _MmapedDict(filename)
             self._file = files[file_prefix]
-            self._key = json.dumps((metric_name, name, labelnames, labelvalues))
+            self._key = _mmap_key(metric_name, name, labelnames, labelvalues)
             self._value = self._file.read_value(self._key)
 
         def __check_for_pid_change(self):
@@ -495,6 +727,7 @@ else:
 
 class _LabelWrapper(object):
     '''Handles labels for the wrapped metric.'''
+
     def __init__(self, wrappedClass, name, labelnames, **kwargs):
         self._wrappedClass = wrappedClass
         self._type = wrappedClass._type
@@ -544,7 +777,12 @@ class _LabelWrapper(object):
             labelvalues = tuple(unicode(l) for l in labelvalues)
         with self._lock:
             if labelvalues not in self._metrics:
-                self._metrics[labelvalues] = self._wrappedClass(self._name, self._labelnames, labelvalues, **self._kwargs)
+                self._metrics[labelvalues] = self._wrappedClass(
+                    self._name,
+                    self._labelnames,
+                    labelvalues,
+                    **self._kwargs
+                )
             return self._metrics[labelvalues]
 
     def remove(self, *labelvalues):
@@ -566,13 +804,22 @@ class _LabelWrapper(object):
 
 def _MetricWrapper(cls):
     '''Provides common functionality for metrics.'''
-    def init(name, documentation, labelnames=(), namespace='', subsystem='', registry=REGISTRY, **kwargs):
+
+    def init(name, documentation, labelnames=(), namespace='', subsystem='', unit='', registry=REGISTRY, **kwargs):
         full_name = ''
         if namespace:
             full_name += namespace + '_'
         if subsystem:
             full_name += subsystem + '_'
         full_name += name
+
+        if unit and not full_name.endswith("_" + unit):
+            full_name += "_" + unit
+        if unit and cls._type in ('info', 'stateset'):
+            raise ValueError('Metric name is of a type that cannot have a unit: ' + full_name)
+
+        if cls._type == 'counter' and full_name.endswith('_total'):
+            full_name = full_name[:-6]  # Munge to OpenMetrics.
 
         if labelnames:
             labelnames = tuple(labelnames)
@@ -592,13 +839,15 @@ def _MetricWrapper(cls):
 
         def describe():
             return [Metric(full_name, documentation, cls._type)]
+
         collector.describe = describe
 
         def collect():
-            metric = Metric(full_name, documentation, cls._type)
+            metric = Metric(full_name, documentation, cls._type, unit)
             for suffix, labels, value in collector._samples():
                 metric.add_sample(full_name + suffix, labels, value)
             return [metric]
+
         collector.collect = collect
 
         if registry:
@@ -646,7 +895,10 @@ class Counter(object):
     _reserved_labelnames = []
 
     def __init__(self, name, labelnames, labelvalues):
-        self._value = _ValueClass(self._type, name, name, labelnames, labelvalues)
+        if name.endswith('_total'):
+            name = name[:-6]
+        self._value = _ValueClass(self._type, name, name + '_total', labelnames, labelvalues)
+        self._created = time.time()
 
     def inc(self, amount=1):
         '''Increment counter by the given amount.'''
@@ -664,7 +916,10 @@ class Counter(object):
         return _ExceptionCounter(self, exception)
 
     def _samples(self):
-        return (('', {}, self._value.get()), )
+        return (
+            ('_total', {}, self._value.get()),
+            ('_created', {}, self._created),
+        )
 
 
 @_MetricWrapper
@@ -707,10 +962,11 @@ class Gauge(object):
     '''
     _type = 'gauge'
     _reserved_labelnames = []
+    _MULTIPROC_MODES = frozenset(('min', 'max', 'livesum', 'liveall', 'all'))
 
     def __init__(self, name, labelnames, labelvalues, multiprocess_mode='all'):
-        if (_ValueClass._multiprocess
-                and multiprocess_mode not in ['min', 'max', 'livesum', 'liveall', 'all']):
+        if (_ValueClass._multiprocess and
+                multiprocess_mode not in self._MULTIPROC_MODES):
             raise ValueError('Invalid multiprocess mode: ' + multiprocess_mode)
         self._value = _ValueClass(
             self._type, name, name, labelnames, labelvalues,
@@ -746,7 +1002,7 @@ class Gauge(object):
 
         Can be used as a function decorator or context manager.
         '''
-        return _GaugeTimer(self)
+        return _Timer(self.set)
 
     def set_function(self, f):
         '''Call the provided function to return the Gauge value.
@@ -754,12 +1010,14 @@ class Gauge(object):
         The function must return a float, and may be called from
         multiple threads. All other methods of the Gauge become NOOPs.
         '''
+
         def samples(self):
-            return (('', {}, float(f())), )
+            return (('', {}, float(f())),)
+
         self._samples = types.MethodType(samples, self)
 
     def _samples(self):
-        return (('', {}, self._value.get()), )
+        return (('', {}, self._value.get()),)
 
 
 @_MetricWrapper
@@ -799,6 +1057,7 @@ class Summary(object):
     def __init__(self, name, labelnames, labelvalues):
         self._count = _ValueClass(self._type, name, name + '_count', labelnames, labelvalues)
         self._sum = _ValueClass(self._type, name, name + '_sum', labelnames, labelvalues)
+        self._created = time.time()
 
     def observe(self, amount):
         '''Observe the given amount.'''
@@ -810,12 +1069,13 @@ class Summary(object):
 
         Can be used as a function decorator or context manager.
         '''
-        return _SummaryTimer(self)
+        return _Timer(self.observe)
 
     def _samples(self):
         return (
             ('_count', {}, self._count.get()),
-            ('_sum', {}, self._sum.get()))
+            ('_sum', {}, self._sum.get()),
+            ('_created', {}, self._created))
 
 
 def _floatToGoString(d):
@@ -864,13 +1124,12 @@ class Histogram(object):
 
     The default buckets are intended to cover a typical web/rpc request from milliseconds to seconds.
     They can be overridden by passing `buckets` keyword argument to `Histogram`.
-
-    **NB** The Python client doesn't store or expose quantile information at this time.
     '''
     _type = 'histogram'
-    _reserved_labelnames = ['histogram']
+    _reserved_labelnames = ['le']
 
     def __init__(self, name, labelnames, labelvalues, buckets=(.005, .01, .025, .05, .075, .1, .25, .5, .75, 1.0, 2.5, 5.0, 7.5, 10.0, _INF)):
+        self._created = time.time()
         self._sum = _ValueClass(self._type, name, name + '_sum', labelnames, labelvalues)
         buckets = [float(b) for b in buckets]
         if buckets != sorted(buckets):
@@ -885,7 +1144,13 @@ class Histogram(object):
         self._buckets = []
         bucket_labelnames = labelnames + ('le',)
         for b in buckets:
-            self._buckets.append(_ValueClass(self._type, name, name + '_bucket', bucket_labelnames, labelvalues + (_floatToGoString(b),)))
+            self._buckets.append(_ValueClass(
+                self._type,
+                name,
+                name + '_bucket',
+                bucket_labelnames,
+                labelvalues + (_floatToGoString(b),),
+            ))
 
     def observe(self, amount):
         '''Observe the given amount.'''
@@ -900,7 +1165,7 @@ class Histogram(object):
 
         Can be used as a function decorator or context manager.
         '''
-        return _HistogramTimer(self)
+        return _Timer(self.observe)
 
     def _samples(self):
         samples = []
@@ -910,25 +1175,87 @@ class Histogram(object):
             samples.append(('_bucket', {'le': _floatToGoString(bound)}, acc))
         samples.append(('_count', {}, acc))
         samples.append(('_sum', {}, self._sum.get()))
+        samples.append(('_created', {}, self._created))
         return tuple(samples)
 
 
-class _HistogramTimer(object):
-    def __init__(self, histogram):
-        self._histogram = histogram
+@_MetricWrapper
+class Info(object):
+    '''Info metric, key-value pairs.
 
-    def __enter__(self):
-        self._start = default_timer()
+     Examples of Info include:
+        - Build information
+        - Version information
+        - Potential target metadata
 
-    def __exit__(self, typ, value, traceback):
-        # Time can go backwards.
-        self._histogram.observe(max(default_timer() - self._start, 0))
+     Example usage:
+        from prometheus_client import Info
 
-    def __call__(self, f):
-        def wrapped(func, *args, **kwargs):
-            with self:
-                return func(*args, **kwargs)
-        return decorate(f, wrapped)
+        i = Info('my_build', 'Description of info')
+        i.info({'version': '1.2.3', 'buildhost': 'foo@bar'})
+
+     Info metrics do not work in multiprocess mode.
+    '''
+    _type = 'info'
+    _reserved_labelnames = []
+
+    def __init__(self, name, labelnames, labelvalues):
+        self._labelnames = set(labelnames)
+        self._lock = Lock()
+        self._value = {}
+
+    def info(self, val):
+        '''Set info metric.'''
+        if self._labelnames.intersection(val.keys()):
+            raise ValueError('Overlapping labels for Info metric, metric: %s child: %s' % (
+                self._labelnames, val))
+        with self._lock:
+            self._value = dict(val)
+
+    def _samples(self):
+        with self._lock:
+            return (('_info', self._value, 1.0,),)
+
+
+@_MetricWrapper
+class Enum(object):
+    '''Enum metric, which of a set of states is true.
+
+     Example usage:
+        from prometheus_client import Enum
+
+        e = Enum('task_state', 'Description of enum',
+          states=['starting', 'running', 'stopped'])
+        e.state('running')
+
+     The first listed state will be the default.
+     Enum metrics do not work in multiprocess mode.
+    '''
+    _type = 'stateset'
+    _reserved_labelnames = []
+
+    def __init__(self, name, labelnames, labelvalues, states=None):
+        if name in labelnames:
+            raise ValueError('Overlapping labels for Enum metric: %s' % (name,))
+        if not states:
+            raise ValueError('No states provided for Enum metric: %s' % (name,))
+        self._name = name
+        self._states = states
+        self._value = 0
+        self._lock = Lock()
+
+    def state(self, state):
+        '''Set enum metric state.'''
+        with self._lock:
+            self._value = self._states.index(state)
+
+    def _samples(self):
+        with self._lock:
+            return [
+                ('', {self._name: s}, 1 if i == self._value else 0,)
+                for i, s
+                in enumerate(self._states)
+            ]
 
 
 class _ExceptionCounter(object):
@@ -947,6 +1274,7 @@ class _ExceptionCounter(object):
         def wrapped(func, *args, **kwargs):
             with self:
                 return func(*args, **kwargs)
+
         return decorate(f, wrapped)
 
 
@@ -964,40 +1292,30 @@ class _InprogressTracker(object):
         def wrapped(func, *args, **kwargs):
             with self:
                 return func(*args, **kwargs)
+
         return decorate(f, wrapped)
 
 
-class _SummaryTimer(object):
-    def __init__(self, summary):
-        self._summary = summary
+class _Timer(object):
+    def __init__(self, callback):
+        self._callback = callback
+
+    def _new_timer(self):
+        return self.__class__(self._callback)
 
     def __enter__(self):
         self._start = default_timer()
 
     def __exit__(self, typ, value, traceback):
         # Time can go backwards.
-        self._summary.observe(max(default_timer() - self._start, 0))
+        duration = max(default_timer() - self._start, 0)
+        self._callback(duration)
 
     def __call__(self, f):
         def wrapped(func, *args, **kwargs):
-            with self:
+            # Obtaining new instance of timer every time
+            # ensures thread safety and reentrancy.
+            with self._new_timer():
                 return func(*args, **kwargs)
-        return decorate(f, wrapped)
 
-
-class _GaugeTimer(object):
-    def __init__(self, gauge):
-        self._gauge = gauge
-
-    def __enter__(self):
-        self._start = default_timer()
-
-    def __exit__(self, typ, value, traceback):
-        # Time can go backwards.
-        self._gauge.set(max(default_timer() - self._start, 0))
-
-    def __call__(self, f):
-        def wrapped(func, *args, **kwargs):
-            with self:
-                return func(*args, **kwargs)
         return decorate(f, wrapped)

@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="prometheus_client",
-    version="0.2.0",
+    version="0.4.2",
     author="Brian Brazil",
     author_email="brian.brazil@robustperception.io",
     description="Python client for the Prometheus monitoring system.",
@@ -15,6 +15,7 @@ setup(
     packages=[
         'prometheus_client',
         'prometheus_client.bridge',
+        'prometheus_client.openmetrics',
         'prometheus_client.twisted',
     ],
     extras_require={
