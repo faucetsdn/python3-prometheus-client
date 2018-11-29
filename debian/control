@@ -7,10 +7,8 @@ Priority: optional
 Build-Depends: debhelper (>= 11~),
 Build-Depends-Indep: dh-python,
                      python-all,
-                     python-decorator (>= 4.0.10),
                      python-setuptools,
                      python3-all,
-                     python3-decorator (>= 4.0.10),
                      python3-setuptools,
 Standards-Version: 4.1.5
 Vcs-Browser: https://salsa.debian.org/debian/python-prometheus-client
@@ -19,8 +17,7 @@ Homepage: https://github.com/prometheus/client_python
 
 Package: python-prometheus-client
 Architecture: all
-Depends: python-decorator (>= 4.0.10-1),
-         ${misc:Depends},
+Depends: ${misc:Depends},
          ${python:Depends},
 Description: Python 2 client for the Prometheus monitoring system
  This library provides an API for exporting metrics from a Python application.
@@ -40,8 +37,7 @@ Description: Python 2 client for the Prometheus monitoring system
 
 Package: python3-prometheus-client
 Architecture: all
-Depends: python3-decorator (>= 4.0.10-1),
-         ${misc:Depends},
+Depends: ${misc:Depends},
          ${python3:Depends},
 Description: Python 3 client for the Prometheus monitoring system
  This library provides an API for exporting metrics from a Python 3 application
