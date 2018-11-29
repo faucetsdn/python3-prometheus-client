@@ -4,11 +4,15 @@ python-prometheus-client (0.4.2-1) unstable; urgency=medium
 
  -- Brad Cowie <brad@faucet.nz>  Thu, 29 Nov 2018 14:39:12 +1300
 
-python-prometheus-client (0.2.0-1) unstable; urgency=medium
+python-prometheus-client (0.3.0-1) unstable; urgency=medium
 
   * New upstream release.
+  * Update gbp.conf for new repo layout.
+  * Update Vcs location to salsa.
+  * Automated cme fixes.
+  * Refresh patches.
 
- -- Brad Cowie <brad@faucet.nz>  Wed, 06 Jun 2018 15:03:12 +1200
+ -- Martín Ferrari <tincho@debian.org>  Fri, 27 Jul 2018 17:33:07 +0000
 
 python-prometheus-client (0.1.1-1) unstable; urgency=medium
 
