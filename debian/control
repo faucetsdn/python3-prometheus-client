@@ -4,7 +4,7 @@ Uploaders: Federico Ceratto <federico@debian.org>,
            Martín Ferrari <tincho@debian.org>,
 Section: python
 Priority: optional
-Build-Depends: debhelper (>= 11~),
+Build-Depends: debhelper (>= 9),
 Build-Depends-Indep: dh-python,
                      python-all,
                      python-setuptools,
