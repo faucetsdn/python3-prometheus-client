@@ -1,0 +1,17 @@
+From: Federico Ceratto <federico@debian.org>
+Date: Tue, 3 Jan 2017 21:30:13 +0000
+Subject: Import unvendorized decorator.py
+Forwarded: no
+
+---
+--- a/prometheus_client/context_managers.py
++++ b/prometheus_client/context_managers.py
+@@ -2,7 +2,7 @@
+ 
+ from timeit import default_timer
+ 
+-from .decorator import decorate
++from decorator import decorate
+ 
+ 
+ class ExceptionCounter(object):

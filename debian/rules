@@ -12,3 +12,4 @@ export https_proxy=
 
 override_dh_auto_clean:
 	dh_auto_clean
+	rm ./prometheus_client/decorator.py -f

@@ -1,8 +1,12 @@
-python-prometheus-client (0.4.2-1) unstable; urgency=medium
+python-prometheus-client (0.5.0+1-1) unstable; urgency=medium
 
-  * New upstream release.
+  * New upstream release. Including one commit ahead of the release, since it
+    solves a memory leak.
+  * Update Standards-Version with no changes.
+  * Refresh patches.
+  * Add new test dependencies.
 
- -- Brad Cowie <brad@faucet.nz>  Thu, 29 Nov 2018 14:39:12 +1300
+ -- Martín Ferrari <tincho@debian.org>  Thu, 27 Dec 2018 10:33:38 +0000
 
 python-prometheus-client (0.3.0-1) unstable; urgency=medium
 
