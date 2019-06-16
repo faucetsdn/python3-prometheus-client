@@ -57,7 +57,7 @@ This package can be found on
 
 Four types of metric are offered: Counter, Gauge, Summary and Histogram.
 See the documentation on [metric types](http://prometheus.io/docs/concepts/metric_types/)
-and [instrumentation best practices](http://prometheus.io/docs/practices/instrumentation/#counter-vs.-gauge,-summary-vs.-histogram)
+and [instrumentation best practices](https://prometheus.io/docs/practices/instrumentation/#counter-vs-gauge-summary-vs-histogram)
 on how to use them.
 
 ### Counter
@@ -461,7 +461,7 @@ return an empty list.
 
 ## Multiprocess Mode (Gunicorn)
 
-Prometheus client libaries presume a threaded model, where metrics are shared
+Prometheus client libraries presume a threaded model, where metrics are shared
 across workers. This doesn't work so well for languages such as Python where
 it's common to have processes rather than threads to handle large workloads.
 
