@@ -1,3 +1,9 @@
+python-prometheus-client (0.8.0-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Brad Cowie <brad@faucet.nz>  Tue, 09 Jun 2020 11:34:38 +1200
+
 python-prometheus-client (0.7.1-1) unstable; urgency=medium
 
   * New upstream release.
