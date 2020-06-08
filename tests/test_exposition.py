@@ -56,8 +56,20 @@ class TestGenerateText(unittest.TestCase):
         self.assertEqual(b"""# HELP cc_total A counter
 # TYPE cc_total counter
 cc_total 1.0
+# HELP cc_created A counter
 # TYPE cc_created gauge
 cc_created 123.456
+""", generate_latest(self.registry))
+
+    def test_counter_name_unit_append(self):
+        c = Counter('requests', 'Request counter', unit="total", registry=self.registry)
+        c.inc()
+        self.assertEqual(b"""# HELP requests_total_total Request counter
+# TYPE requests_total_total counter
+requests_total_total 1.0
+# HELP requests_total_created Request counter
+# TYPE requests_total_created gauge
+requests_total_created 123.456
 """, generate_latest(self.registry))
 
     def test_counter_total(self):
@@ -66,6 +78,7 @@ cc_created 123.456
         self.assertEqual(b"""# HELP cc_total A counter
 # TYPE cc_total counter
 cc_total 1.0
+# HELP cc_created A counter
 # TYPE cc_created gauge
 cc_created 123.456
 """, generate_latest(self.registry))
@@ -82,6 +95,7 @@ cc_created 123.456
 # TYPE ss summary
 ss_count{a="c",b="d"} 1.0
 ss_sum{a="c",b="d"} 17.0
+# HELP ss_created A summary
 # TYPE ss_created gauge
 ss_created{a="c",b="d"} 123.456
 """, generate_latest(self.registry))
@@ -109,6 +123,7 @@ hh_bucket{le="10.0"} 1.0
 hh_bucket{le="+Inf"} 1.0
 hh_count 1.0
 hh_sum 0.05
+# HELP hh_created A histogram
 # TYPE hh_created gauge
 hh_created 123.456
 """, generate_latest(self.registry))
@@ -119,8 +134,10 @@ hh_created 123.456
 # TYPE gh histogram
 gh_bucket{le="1.0"} 4.0
 gh_bucket{le="+Inf"} 5.0
+# HELP gh_gcount help
 # TYPE gh_gcount gauge
 gh_gcount 5.0
+# HELP gh_gsum help
 # TYPE gh_gsum gauge
 gh_gsum 7.0
 """, generate_latest(self.registry))
@@ -229,6 +246,13 @@ class TestPushGateway(unittest.TestCase):
         self.assertEqual(self.requests[0][0].headers.get('content-type'), CONTENT_TYPE_LATEST)
         self.assertEqual(self.requests[0][1], b'# HELP g help\n# TYPE g gauge\ng 0.0\n')
 
+    def test_push_schemeless_url(self):
+        push_to_gateway(self.address.replace('http://', ''), "my_job", self.registry)
+        self.assertEqual(self.requests[0][0].command, 'PUT')
+        self.assertEqual(self.requests[0][0].path, '/metrics/job/my_job')
+        self.assertEqual(self.requests[0][0].headers.get('content-type'), CONTENT_TYPE_LATEST)
+        self.assertEqual(self.requests[0][1], b'# HELP g help\n# TYPE g gauge\ng 0.0\n')
+
     def test_push_with_groupingkey(self):
         push_to_gateway(self.address, "my_job", self.registry, {'a': 9})
         self.assertEqual(self.requests[0][0].command, 'PUT')
@@ -236,10 +260,24 @@ class TestPushGateway(unittest.TestCase):
         self.assertEqual(self.requests[0][0].headers.get('content-type'), CONTENT_TYPE_LATEST)
         self.assertEqual(self.requests[0][1], b'# HELP g help\n# TYPE g gauge\ng 0.0\n')
 
+    def test_push_with_groupingkey_empty_label(self):
+        push_to_gateway(self.address, "my_job", self.registry, {'a': ''})
+        self.assertEqual(self.requests[0][0].command, 'PUT')
+        self.assertEqual(self.requests[0][0].path, '/metrics/job/my_job/a@base64/=')
+        self.assertEqual(self.requests[0][0].headers.get('content-type'), CONTENT_TYPE_LATEST)
+        self.assertEqual(self.requests[0][1], b'# HELP g help\n# TYPE g gauge\ng 0.0\n')
+
     def test_push_with_complex_groupingkey(self):
         push_to_gateway(self.address, "my_job", self.registry, {'a': 9, 'b': 'a/ z'})
         self.assertEqual(self.requests[0][0].command, 'PUT')
-        self.assertEqual(self.requests[0][0].path, '/metrics/job/my_job/a/9/b/a%2F+z')
+        self.assertEqual(self.requests[0][0].path, '/metrics/job/my_job/a/9/b@base64/YS8geg==')
+        self.assertEqual(self.requests[0][0].headers.get('content-type'), CONTENT_TYPE_LATEST)
+        self.assertEqual(self.requests[0][1], b'# HELP g help\n# TYPE g gauge\ng 0.0\n')
+
+    def test_push_with_complex_job(self):
+        push_to_gateway(self.address, "my/job", self.registry)
+        self.assertEqual(self.requests[0][0].command, 'PUT')
+        self.assertEqual(self.requests[0][0].path, '/metrics/job@base64/bXkvam9i')
         self.assertEqual(self.requests[0][0].headers.get('content-type'), CONTENT_TYPE_LATEST)
         self.assertEqual(self.requests[0][1], b'# HELP g help\n# TYPE g gauge\ng 0.0\n')
 
@@ -373,7 +411,6 @@ def test_summary_metric_family(registry, count_value, sum_value, error):
 
 
 @pytest.mark.parametrize('MetricFamily', [
-    core.HistogramMetricFamily,
     core.GaugeHistogramMetricFamily,
 ])
 @pytest.mark.parametrize('buckets,sum_value,error', [

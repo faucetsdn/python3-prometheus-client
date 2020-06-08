@@ -1,14 +1,22 @@
 from setuptools import setup
+import sys
+from os import path
+
+if sys.version_info >= (2, 7):
+    with open(path.join(path.abspath(path.dirname(__file__)), 'README.md')) as f:
+        long_description = f.read()
+else: # Assuming we don't run setup in order to publish under python 2.6
+    long_description = "NA"
+
 
 setup(
     name="prometheus_client",
-    version="0.7.1",
+    version="0.8.0",
     author="Brian Brazil",
     author_email="brian.brazil@robustperception.io",
     description="Python client for the Prometheus monitoring system.",
-    long_description=(
-        "See https://github.com/prometheus/client_python/blob/master/README.md"
-        " for documentation."),
+    long_description=long_description,
+    long_description_content_type='text/markdown',
     license="Apache Software License 2.0",
     keywords="prometheus monitoring instrumentation client",
     url="https://github.com/prometheus/client_python",
@@ -36,9 +44,11 @@ setup(
         "Programming Language :: Python :: 3.5",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: Implementation :: CPython",
         "Programming Language :: Python :: Implementation :: PyPy",
         "Topic :: System :: Monitoring",
         "License :: OSI Approved :: Apache Software License",
     ],
+    options={'bdist_wheel': {'universal': '1'}},
 )

@@ -30,9 +30,13 @@ class TestCounter(unittest.TestCase):
         self.assertEqual(1, self.registry.get_sample_value('c_total'))
         self.counter.inc(7)
         self.assertEqual(8, self.registry.get_sample_value('c_total'))
+    
+    def test_repr(self):
+        self.assertEqual(repr(self.counter), "prometheus_client.metrics.Counter(c)")
 
     def test_negative_increment_raises(self):
         self.assertRaises(ValueError, self.counter.inc, -1)
+    
 
     def test_function_decorator(self):
         @self.counter.count_exceptions(ValueError)
@@ -70,11 +74,22 @@ class TestCounter(unittest.TestCase):
         self.assertTrue(raised)
         self.assertEqual(1, self.registry.get_sample_value('c_total'))
 
+    def test_count_exceptions_not_observable(self):
+        counter = Counter('counter', 'help', labelnames=('label',), registry=self.registry)
+
+        try:
+            counter.count_exceptions()
+        except ValueError as e:
+            self.assertIn('missing label values', str(e))
+
 
 class TestGauge(unittest.TestCase):
     def setUp(self):
         self.registry = CollectorRegistry()
         self.gauge = Gauge('g', 'help', registry=self.registry)
+    
+    def test_repr(self):
+        self.assertEqual(repr(self.gauge), "prometheus_client.metrics.Gauge(g)")
 
     def test_gauge(self):
         self.assertEqual(0, self.registry.get_sample_value('g'))
@@ -150,11 +165,30 @@ class TestGauge(unittest.TestCase):
             time.sleep(.001)
         self.assertNotEqual(0, self.registry.get_sample_value('g'))
 
+    def test_track_in_progress_not_observable(self):
+        g = Gauge('test', 'help', labelnames=('label',), registry=self.registry)
+
+        try:
+            g.track_inprogress()
+        except ValueError as e:
+            self.assertIn('missing label values', str(e))
+
+    def test_timer_not_observable(self):
+        g = Gauge('test', 'help', labelnames=('label',), registry=self.registry)
+
+        try:
+            g.time()
+        except ValueError as e:
+            self.assertIn('missing label values', str(e))
+
 
 class TestSummary(unittest.TestCase):
     def setUp(self):
         self.registry = CollectorRegistry()
         self.summary = Summary('s', 'help', registry=self.registry)
+
+    def test_repr(self):
+        self.assertEqual(repr(self.summary), "prometheus_client.metrics.Summary(s)")
 
     def test_summary(self):
         self.assertEqual(0, self.registry.get_sample_value('s_count'))
@@ -230,12 +264,24 @@ class TestSummary(unittest.TestCase):
             pass
         self.assertEqual(1, self.registry.get_sample_value('s_count'))
 
+    def test_timer_not_observable(self):
+        s = Summary('test', 'help', labelnames=('label',), registry=self.registry)
+
+        try:
+            s.time()
+        except ValueError as e:
+            self.assertIn('missing label values', str(e))
+
 
 class TestHistogram(unittest.TestCase):
     def setUp(self):
         self.registry = CollectorRegistry()
         self.histogram = Histogram('h', 'help', registry=self.registry)
         self.labels = Histogram('hl', 'help', ['l'], registry=self.registry)
+
+    def test_repr(self):
+        self.assertEqual(repr(self.histogram), "prometheus_client.metrics.Histogram(h)")
+        self.assertEqual(repr(self.labels), "prometheus_client.metrics.Histogram(hl)")
 
     def test_histogram(self):
         self.assertEqual(0, self.registry.get_sample_value('h_bucket', {'le': '1.0'}))
@@ -341,6 +387,10 @@ class TestInfo(unittest.TestCase):
         self.info = Info('i', 'help', registry=self.registry)
         self.labels = Info('il', 'help', ['l'], registry=self.registry)
 
+    def test_repr(self):
+        self.assertEqual(repr(self.info), "prometheus_client.metrics.Info(i)")
+        self.assertEqual(repr(self.labels), "prometheus_client.metrics.Info(il)")
+
     def test_info(self):
         self.assertEqual(1, self.registry.get_sample_value('i_info', {}))
         self.info.info({'a': 'b', 'c': 'd'})
@@ -378,6 +428,7 @@ class TestEnum(unittest.TestCase):
         self.assertEqual(0, self.registry.get_sample_value('el', {'l': 'a', 'el': 'a'}))
         self.assertEqual(0, self.registry.get_sample_value('el', {'l': 'a', 'el': 'b'}))
         self.assertEqual(1, self.registry.get_sample_value('el', {'l': 'a', 'el': 'c'}))
+        self.assertRaises(ValueError, self.labels.state, 'a')
 
     def test_overlapping_labels(self):
         with pytest.raises(ValueError):
@@ -475,6 +526,11 @@ class TestMetricWrapper(unittest.TestCase):
     def test_no_units_for_info_enum(self):
         self.assertRaises(ValueError, Info, 'foo', 'help', unit="x")
         self.assertRaises(ValueError, Enum, 'foo', 'help', unit="x")
+
+    def test_name_cleanup_before_unit_append(self):
+        self.assertEqual(self.counter._name, 'c')
+        self.c = Counter('c_total', 'help', unit="total", labelnames=['l'], registry=self.registry)
+        self.assertEqual(self.c._name, 'c_total')
 
 
 class TestMetricFamilies(unittest.TestCase):
@@ -607,7 +663,7 @@ class TestMetricFamilies(unittest.TestCase):
         self.assertRaises(ValueError, SummaryMetricFamily, 's', 'help', count_value=1, sum_value=1, labels=['a'])
 
         self.assertRaises(ValueError, HistogramMetricFamily, 'h', 'help', sum_value=1)
-        self.assertRaises(ValueError, HistogramMetricFamily, 'h', 'help', buckets={})
+        self.assertRaises(KeyError, HistogramMetricFamily, 'h', 'help', buckets={})
         self.assertRaises(ValueError, HistogramMetricFamily, 'h', 'help', sum_value=1, labels=['a'])
         self.assertRaises(ValueError, HistogramMetricFamily, 'h', 'help', buckets={}, labels=['a'])
         self.assertRaises(ValueError, HistogramMetricFamily, 'h', 'help', buckets={}, sum_value=1, labels=['a'])
@@ -664,6 +720,9 @@ class TestCollectorRegistry(unittest.TestCase):
         # The name of the histogram itself isn't taken.
         Gauge('h', 'help', registry=registry)
 
+        Info('i', 'help', registry=registry)
+        self.assertRaises(ValueError, Gauge, 'i_info', 'help', registry=registry)
+
     def test_unregister_works(self):
         registry = CollectorRegistry()
         s = Summary('s', 'help', registry=registry)
@@ -695,6 +754,34 @@ class TestCollectorRegistry(unittest.TestCase):
         m = Metric('s', 'help', 'summary')
         m.samples = [Sample('s_sum', {}, 7)]
         self.assertEquals([m], registry.restricted_registry(['s_sum']).collect())
+
+    def test_target_info_injected(self):
+        registry = CollectorRegistry(target_info={'foo': 'bar'})
+        self.assertEqual(1, registry.get_sample_value('target_info', {'foo': 'bar'}))
+
+    def test_target_info_duplicate_detected(self):
+        registry = CollectorRegistry(target_info={'foo': 'bar'})
+        self.assertRaises(ValueError, Info, 'target', 'help', registry=registry)
+
+        registry.set_target_info({})
+        i = Info('target', 'help', registry=registry)
+        registry.set_target_info({})
+        self.assertRaises(ValueError, Info, 'target', 'help', registry=registry)
+        self.assertRaises(ValueError, registry.set_target_info, {'foo': 'bar'})
+        registry.unregister(i)
+        registry.set_target_info({'foo': 'bar'})
+
+    def test_target_info_restricted_registry(self):
+        registry = CollectorRegistry(target_info={'foo': 'bar'})
+        Summary('s', 'help', registry=registry).observe(7)
+
+        m = Metric('s', 'help', 'summary')
+        m.samples = [Sample('s_sum', {}, 7)]
+        self.assertEquals([m], registry.restricted_registry(['s_sum']).collect())
+
+        m = Metric('target', 'Target metadata', 'info')
+        m.samples = [Sample('target_info', {'foo': 'bar'}, 1)]
+        self.assertEquals([m], registry.restricted_registry(['target_info']).collect())
 
 
 if __name__ == '__main__':

@@ -53,6 +53,22 @@ a 1.2
 """)
         self.assertEqual([GaugeMetricFamily("a", "help", value=1.2)], list(families))
 
+    def test_leading_zeros_simple_gauge(self):
+        families = text_string_to_metric_families("""# TYPE a gauge
+# HELP a help
+a 0000000000000000000000000000000000000000001
+# EOF
+""")
+        self.assertEqual([GaugeMetricFamily("a", "help", value=1)], list(families))
+
+    def test_leading_zeros_float_gauge(self):
+        families = text_string_to_metric_families("""# TYPE a gauge
+# HELP a help
+a 0000000000000000000000000000000000000000001.2e-1
+# EOF
+""")
+        self.assertEqual([GaugeMetricFamily("a", "help", value=.12)], list(families))
+
     def test_nan_gauge(self):
         families = text_string_to_metric_families("""# TYPE a gauge
 # HELP a help
@@ -106,6 +122,32 @@ a_sum 2
         self.assertEqual([HistogramMetricFamily("a", "help", sum_value=2, buckets=[("1.0", 0.0), ("+Inf", 3.0)])],
                          list(families))
 
+    def test_histogram_noncanonical(self):
+        families = text_string_to_metric_families("""# TYPE a histogram
+# HELP a help
+a_bucket{le="0.00000000001"} 0
+a_bucket{le="1.1e-4"} 0
+a_bucket{le="1.1e-3"} 0
+a_bucket{le="100000000000.0"} 0
+a_bucket{le="+Inf"} 3
+a_count 3
+a_sum 2
+# EOF
+""")
+        list(families)
+
+    def test_negative_bucket_histogram(self):
+        families = text_string_to_metric_families("""# TYPE a histogram
+# HELP a help
+a_bucket{le="-1.0"} 0
+a_bucket{le="1.0"} 1
+a_bucket{le="+Inf"} 3
+a_count 3
+# EOF
+""")
+        self.assertEqual([HistogramMetricFamily("a", "help", buckets=[("-1.0", 0.0), ("1.0", 1.0), ("+Inf", 3.0)])],
+                         list(families))
+
     def test_histogram_exemplars(self):
         families = text_string_to_metric_families("""# TYPE a histogram
 # HELP a help
@@ -134,6 +176,19 @@ a_gsum 2
         self.assertEqual([GaugeHistogramMetricFamily("a", "help", gsum_value=2, buckets=[("1.0", 0.0), ("+Inf", 3.0)])],
                          list(families))
 
+    def test_negative_bucket_gaugehistogram(self):
+        families = text_string_to_metric_families("""# TYPE a gaugehistogram
+# HELP a help
+a_bucket{le="-1.0"} 1
+a_bucket{le="1.0"} 2
+a_bucket{le="+Inf"} 3
+a_gcount 3
+a_gsum -5
+# EOF
+""")
+        self.assertEqual([GaugeHistogramMetricFamily("a", "help", gsum_value=-5, buckets=[("-1.0", 1.0), ("1.0", 2.0), ("+Inf", 3.0)])],
+                         list(families))
+
     def test_gaugehistogram_exemplars(self):
         families = text_string_to_metric_families("""# TYPE a gaugehistogram
 # HELP a help
@@ -147,6 +202,16 @@ a_bucket{le="+Inf"} 3 123 # {a="d"} 4 123
         hfm.add_sample("a_bucket", {"le": "2.0"}, 2.0, Timestamp(123, 0), Exemplar({"a": "c"}, 0.5)),
         hfm.add_sample("a_bucket", {"le": "+Inf"}, 3.0, Timestamp(123, 0), Exemplar({"a": "d"}, 4, Timestamp(123, 0)))
         self.assertEqual([hfm], list(families))
+
+    def test_counter_exemplars(self):
+        families = text_string_to_metric_families("""# TYPE a counter
+# HELP a help
+a_total 0 123 # {a="b"} 0.5
+# EOF
+""")
+        cfm = CounterMetricFamily("a", "help")
+        cfm.add_sample("a_total", {}, 0.0, Timestamp(123, 0), Exemplar({"a": "b"}, 0.5))
+        self.assertEqual([cfm], list(families))
 
     def test_simple_info(self):
         families = text_string_to_metric_families("""# TYPE a info
@@ -550,6 +615,11 @@ foo_created 1.520430000123e+09
             ('a{a="1"b="2"} 1\n# EOF\n'),
             ('a{a="1",,b="2"} 1\n# EOF\n'),
             ('a{a="1",b="2",} 1\n# EOF\n'),
+            # Invalid labels.
+            ('a{1="1"} 1\n# EOF\n'),
+            ('a{a="1",a="1"} 1\n# EOF\n'),
+            ('a{1=" # "} 1\n# EOF\n'),
+            ('a{a=" # ",a=" # "} 1\n# EOF\n'),
             # Missing value.
             ('a\n# EOF\n'),
             ('a \n# EOF\n'),
@@ -595,14 +665,25 @@ foo_created 1.520430000123e+09
             ('a  1\n# EOF\n'),
             ('a 1\t\n# EOF\n'),
             ('a 1 \n# EOF\n'),
+            ('a 1_2\n# EOF\n'),
+            ('a 0x1p-3\n# EOF\n'),
+            ('a 0x1P-3\n# EOF\n'),
+            ('a 0b1\n# EOF\n'),
+            ('a 0B1\n# EOF\n'),
+            ('a 0x1\n# EOF\n'),
+            ('a 0X1\n# EOF\n'),
+            ('a 0o1\n# EOF\n'),
+            ('a 0O1\n# EOF\n'),
             # Bad timestamp.
             ('a 1 z\n# EOF\n'),
             ('a 1 1z\n# EOF\n'),
+            ('a 1 1_2\n# EOF\n'),
             ('a 1 1.1.1\n# EOF\n'),
             ('a 1 NaN\n# EOF\n'),
             ('a 1 Inf\n# EOF\n'),
             ('a 1 +Inf\n# EOF\n'),
             ('a 1 -Inf\n# EOF\n'),
+            ('a 1 0x1p-3\n# EOF\n'),
             # Bad exemplars.
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 #\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1# {} 1\n# EOF\n'),
@@ -612,13 +693,17 @@ foo_created 1.520430000123e+09
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 1 1 \n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # '
              '{a="2345678901234567890123456789012345678901234567890123456789012345"} 1 1\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 0x1p-3\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 1 0x1p-3\n# EOF\n'),
             # Exemplars on unallowed samples.
             ('# TYPE a histogram\na_sum 1 # {a="b"} 0.5\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_sum 1 # {a="b"} 0.5\n# EOF\n'),
             ('# TYPE a_bucket gauge\na_bucket 1 # {a="b"} 0.5\n# EOF\n'),
+            ('# TYPE a counter\na_created 1 # {a="b"} 0.5\n# EOF\n'),
             # Exemplars on unallowed metric types.
-            ('# TYPE a counter\na_total 1 # {a="b"} 1\n# EOF\n'),
             ('# TYPE a gauge\na 1 # {a="b"} 1\n# EOF\n'),
+            ('# TYPE a info\na_info 1 # {a="b"} 1\n# EOF\n'),
+            ('# TYPE a stateset\na{a="b"} 1 # {c="d"} 1\n# EOF\n'),
             # Bad stateset/info values.
             ('# TYPE a stateset\na 2\n# EOF\n'),
             ('# TYPE a info\na 2\n# EOF\n'),
@@ -643,6 +728,8 @@ foo_created 1.520430000123e+09
             ('# TYPE a histogram\na_sum -1\n# EOF\n'),
             ('# TYPE a histogram\na_count -1\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} -1\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="-1.0"} 1\na_bucket{le="+Inf"} 2\na_sum -1\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="-1.0"} 1\na_bucket{le="+Inf"} 2\na_sum 1\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_bucket{le="+Inf"} NaN\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_bucket{le="+Inf"} -1\na_gcount -1\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_bucket{le="+Inf"} -1\n# EOF\n'),
@@ -658,9 +745,13 @@ foo_created 1.520430000123e+09
             ('# TYPE a gaugehistogram\na_gsum 1\n# EOF\n'),
             ('# TYPE a histogram\na_count 1\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 0\na_count 1\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="0"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="1"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="0.0000000001"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="1.1e-2"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="1e-04"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="1e+05"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="10000000000"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+INF"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="2"} 0\na_bucket{le="1"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="1"} 1\na_bucket{le="2"} 1\na_bucket{le="+Inf"} 0\n# EOF\n'),
@@ -678,17 +769,7 @@ foo_created 1.520430000123e+09
             ('# TYPE a gauge\na 0\na 0 0\n# EOF\n'),
             ('# TYPE a gauge\na 0 0\na 0\n# EOF\n'),
         ]:
-            with self.assertRaises(ValueError):
-                list(text_string_to_metric_families(case))
-
-    @unittest.skipIf(sys.version_info < (2, 7), "float repr changed from 2.6 to 2.7")
-    def test_invalid_float_input(self):
-        for case in [
-            # Bad histograms.
-            ('# TYPE a histogram\na_bucket{le="9.999999999999999e+22"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="1.5555555555555201e+06"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
-        ]:
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError, msg=case):
                 list(text_string_to_metric_families(case))
 
 
