@@ -4,9 +4,11 @@ Subject: Import unvendorized decorator.py
 Forwarded: no
 
 ---
---- a/prometheus_client/context_managers.py
-+++ b/prometheus_client/context_managers.py
-@@ -2,7 +2,7 @@
+Index: build/prometheus_client/context_managers.py
+===================================================================
+--- build.orig/prometheus_client/context_managers.py
++++ build/prometheus_client/context_managers.py
+@@ -2,7 +2,7 @@ from __future__ import unicode_literals
  
  from timeit import default_timer
  
@@ -15,3 +17,16 @@ Forwarded: no
  
  
  class ExceptionCounter(object):
+Index: build/tests/test_core.py
+===================================================================
+--- build.orig/tests/test_core.py
++++ build/tests/test_core.py
+@@ -11,7 +11,7 @@ from prometheus_client.core import (
+     HistogramMetricFamily, Info, InfoMetricFamily, Metric, Sample,
+     StateSetMetricFamily, Summary, SummaryMetricFamily, UntypedMetricFamily,
+ )
+-from prometheus_client.decorator import getargspec
++from inspect import getargspec
+ 
+ try:
+     import unittest2 as unittest
