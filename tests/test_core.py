@@ -1,7 +1,6 @@
 from __future__ import unicode_literals
 
 from concurrent.futures import ThreadPoolExecutor
-import inspect
 import time
 
 import pytest
@@ -12,6 +11,7 @@ from prometheus_client.core import (
     HistogramMetricFamily, Info, InfoMetricFamily, Metric, Sample,
     StateSetMetricFamily, Summary, SummaryMetricFamily, UntypedMetricFamily,
 )
+from prometheus_client.decorator import getargspec
 
 try:
     import unittest2 as unittest
@@ -46,7 +46,7 @@ class TestCounter(unittest.TestCase):
             else:
                 raise TypeError
 
-        self.assertEqual((["r"], None, None, None), inspect.getargspec(f))
+        self.assertEqual((["r"], None, None, None), getargspec(f))
 
         try:
             f(False)
@@ -107,7 +107,7 @@ class TestGauge(unittest.TestCase):
         def f():
             self.assertEqual(1, self.registry.get_sample_value('g'))
 
-        self.assertEqual(([], None, None, None), inspect.getargspec(f))
+        self.assertEqual(([], None, None, None), getargspec(f))
 
         f()
         self.assertEqual(0, self.registry.get_sample_value('g'))
@@ -134,7 +134,7 @@ class TestGauge(unittest.TestCase):
         def f():
             time.sleep(.001)
 
-        self.assertEqual(([], None, None, None), inspect.getargspec(f))
+        self.assertEqual(([], None, None, None), getargspec(f))
 
         f()
         self.assertNotEqual(0, self.registry.get_sample_value('g'))
@@ -204,7 +204,7 @@ class TestSummary(unittest.TestCase):
         def f():
             pass
 
-        self.assertEqual(([], None, None, None), inspect.getargspec(f))
+        self.assertEqual(([], None, None, None), getargspec(f))
 
         f()
         self.assertEqual(1, self.registry.get_sample_value('s_count'))
@@ -345,7 +345,7 @@ class TestHistogram(unittest.TestCase):
         def f():
             pass
 
-        self.assertEqual(([], None, None, None), inspect.getargspec(f))
+        self.assertEqual(([], None, None, None), getargspec(f))
 
         f()
         self.assertEqual(1, self.registry.get_sample_value('h_count'))
@@ -528,9 +528,8 @@ class TestMetricWrapper(unittest.TestCase):
         self.assertRaises(ValueError, Enum, 'foo', 'help', unit="x")
 
     def test_name_cleanup_before_unit_append(self):
-        self.assertEqual(self.counter._name, 'c')
-        self.c = Counter('c_total', 'help', unit="total", labelnames=['l'], registry=self.registry)
-        self.assertEqual(self.c._name, 'c_total')
+        c = Counter('b_total', 'help', unit="total", labelnames=['l'], registry=self.registry)
+        self.assertEqual(c._name, 'b_total')
 
 
 class TestMetricFamilies(unittest.TestCase):
@@ -717,8 +716,8 @@ class TestCollectorRegistry(unittest.TestCase):
         self.assertRaises(ValueError, Gauge, 'h_sum', 'help', registry=registry)
         self.assertRaises(ValueError, Gauge, 'h_bucket', 'help', registry=registry)
         self.assertRaises(ValueError, Gauge, 'h_created', 'help', registry=registry)
-        # The name of the histogram itself isn't taken.
-        Gauge('h', 'help', registry=registry)
+        # The name of the histogram itself is also taken.
+        self.assertRaises(ValueError, Gauge, 'h', 'help', registry=registry)
 
         Info('i', 'help', registry=registry)
         self.assertRaises(ValueError, Gauge, 'i_info', 'help', registry=registry)
@@ -753,7 +752,7 @@ class TestCollectorRegistry(unittest.TestCase):
 
         m = Metric('s', 'help', 'summary')
         m.samples = [Sample('s_sum', {}, 7)]
-        self.assertEquals([m], registry.restricted_registry(['s_sum']).collect())
+        self.assertEqual([m], registry.restricted_registry(['s_sum']).collect())
 
     def test_target_info_injected(self):
         registry = CollectorRegistry(target_info={'foo': 'bar'})
@@ -777,11 +776,11 @@ class TestCollectorRegistry(unittest.TestCase):
 
         m = Metric('s', 'help', 'summary')
         m.samples = [Sample('s_sum', {}, 7)]
-        self.assertEquals([m], registry.restricted_registry(['s_sum']).collect())
+        self.assertEqual([m], registry.restricted_registry(['s_sum']).collect())
 
         m = Metric('target', 'Target metadata', 'info')
         m.samples = [Sample('target_info', {'foo': 'bar'}, 1)]
-        self.assertEquals([m], registry.restricted_registry(['target_info']).collect())
+        self.assertEqual([m], registry.restricted_registry(['target_info']).collect())
 
 
 if __name__ == '__main__':

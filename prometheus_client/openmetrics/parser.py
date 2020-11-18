@@ -15,6 +15,7 @@ except ImportError:
     # Python 3
     import io as StringIO
 
+
 def text_string_to_metric_families(text):
     """Parse Openmetrics text format from a unicode string.
 
@@ -24,7 +25,7 @@ def text_string_to_metric_families(text):
         yield metric_family
 
 
-_CANONICAL_NUMBERS = set([i / 1000.0 for i in range(10000)] + [10.0**i for i in range(-10, 11)] + [float("inf")])
+_CANONICAL_NUMBERS = set([float("inf")])
 
 
 def _isUncanonicalNumber(s):
@@ -113,8 +114,8 @@ def _parse_timestamp(timestamp):
 
 def _is_character_escaped(s, charpos):
     num_bslashes = 0
-    while (charpos > num_bslashes and
-           s[charpos - 1 - num_bslashes] == '\\'):
+    while (charpos > num_bslashes
+           and s[charpos - 1 - num_bslashes] == '\\'):
         num_bslashes += 1
     return num_bslashes % 2 == 1
 
@@ -359,7 +360,7 @@ def _parse_remaining_text(text):
     exemplar = None
     if exemplar_labels is not None:
         exemplar_length = sum([len(k) + len(v) for k, v in exemplar_labels.items()])
-        if exemplar_length > 64:
+        if exemplar_length > 128:
             raise ValueError("Exmplar labels are too long: " + text)
         exemplar = Exemplar(
             exemplar_labels,
@@ -398,6 +399,12 @@ def _check_histogram(samples, name):
             raise ValueError("+Inf bucket missing: " + name)
         if count is not None and value != count:
             raise ValueError("Count does not match +Inf value: " + name)
+        if has_sum and count is None:
+            raise ValueError("_count must be present if _sum is present: " + name)
+        if has_gsum and count is None:
+            raise ValueError("_gcount must be present if _gsum is present: " + name)
+        if not (has_sum or has_gsum) and count is not None:
+            raise ValueError("_sum/_gsum must be present if _count is present: " + name)
         if has_negative_buckets and has_sum:
             raise ValueError("Cannot have _sum with negative buckets: " + name)
         if not has_negative_buckets and has_negative_gsum:
@@ -413,6 +420,7 @@ def _check_histogram(samples, name):
             bucket = None
             has_negative_buckets = False
             has_sum = False
+            has_gsum = False
             has_negative_gsum = False
             value = 0
         group = g
@@ -432,8 +440,10 @@ def _check_histogram(samples, name):
             count = s.value
         elif suffix in ['_sum']:
             has_sum = True
-        elif suffix in ['_gsum'] and s.value < 0:
-            has_negative_gsum = True
+        elif suffix in ['_gsum']:
+            has_gsum = True
+            if s.value < 0:
+                has_negative_gsum = True
 
     if group is not None:
         do_checks()
@@ -452,14 +462,22 @@ def text_fd_to_metric_families(fd):
     allowed_names = []
     eof = False
 
-    seen_metrics = set()
+    seen_names = set()
+    type_suffixes = {
+        'counter': ['_total', '_created'],
+        'summary': ['', '_count', '_sum', '_created'],
+        'histogram': ['_count', '_sum', '_bucket', '_created'],
+        'gaugehistogram': ['_gcount', '_gsum', '_bucket'],
+        'info': ['_info'],
+    }
 
     def build_metric(name, documentation, typ, unit, samples):
-        if name in seen_metrics:
-            raise ValueError("Duplicate metric: " + name)
-        seen_metrics.add(name)
         if typ is None:
             typ = 'unknown'
+        for suffix in set(type_suffixes.get(typ, []) + [""]):
+            if name + suffix in seen_names:
+                raise ValueError("Clashing name: " + name + suffix)
+            seen_names.add(name + suffix)
         if documentation is None:
             documentation = ''
         if unit is None:
@@ -481,6 +499,9 @@ def text_fd_to_metric_families(fd):
 
         if eof:
             raise ValueError("Received line after # EOF: " + line)
+
+        if not line:
+            raise ValueError("Received blank line")
 
         if line == '# EOF':
             eof = True
@@ -518,14 +539,7 @@ def text_fd_to_metric_families(fd):
                 typ = parts[3]
                 if typ == 'untyped':
                     raise ValueError("Invalid TYPE for metric: " + line)
-                allowed_names = {
-                    'counter': ['_total', '_created'],
-                    'summary': ['_count', '_sum', '', '_created'],
-                    'histogram': ['_count', '_sum', '_bucket', '_created'],
-                    'gaugehistogram': ['_gcount', '_gsum', '_bucket'],
-                    'info': ['_info'],
-                }.get(typ, [''])
-                allowed_names = [name + n for n in allowed_names]
+                allowed_names = [name + n for n in type_suffixes.get(typ, [''])]
             elif parts[1] == 'UNIT':
                 if unit is not None:
                     raise ValueError("More than one UNIT for metric: " + line)
@@ -557,7 +571,7 @@ def text_fd_to_metric_families(fd):
                 raise ValueError("Invalid le label: " + line)
             if (typ == 'summary' and name == sample.name
                     and (not (0 <= float(sample.labels.get('quantile', -1)) <= 1)
-                          or _isUncanonicalNumber(sample.labels['quantile']))):
+                         or _isUncanonicalNumber(sample.labels['quantile']))):
                 raise ValueError("Invalid quantile label: " + line)
 
             g = tuple(sorted(_group_for_sample(sample, name, typ).items()))

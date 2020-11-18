@@ -102,12 +102,14 @@ a_sum 2
 a_count 1
 a_sum 2
 a{quantile="0.5"} 0.7
+a{quantile="1"} 0.8
 # EOF
 """)
         # The Python client doesn't support quantiles, but we
         # still need to be able to parse them.
         metric_family = SummaryMetricFamily("a", "help", count_value=1, sum_value=2)
         metric_family.add_sample("a", {"quantile": "0.5"}, 0.7)
+        metric_family.add_sample("a", {"quantile": "1"}, 0.8)
         self.assertEqual([metric_family], list(families))
 
     def test_simple_histogram(self):
@@ -125,9 +127,16 @@ a_sum 2
     def test_histogram_noncanonical(self):
         families = text_string_to_metric_families("""# TYPE a histogram
 # HELP a help
+a_bucket{le="0"} 0
 a_bucket{le="0.00000000001"} 0
+a_bucket{le="0.0000000001"} 0
+a_bucket{le="1e-04"} 0
 a_bucket{le="1.1e-4"} 0
 a_bucket{le="1.1e-3"} 0
+a_bucket{le="1.1e-2"} 0
+a_bucket{le="1"} 0
+a_bucket{le="1e+05"} 0
+a_bucket{le="10000000000"} 0
 a_bucket{le="100000000000.0"} 0
 a_bucket{le="+Inf"} 3
 a_count 3
@@ -142,7 +151,6 @@ a_sum 2
 a_bucket{le="-1.0"} 0
 a_bucket{le="1.0"} 1
 a_bucket{le="+Inf"} 3
-a_count 3
 # EOF
 """)
         self.assertEqual([HistogramMetricFamily("a", "help", buckets=[("-1.0", 0.0), ("1.0", 1.0), ("+Inf", 3.0)])],
@@ -153,14 +161,14 @@ a_count 3
 # HELP a help
 a_bucket{le="1.0"} 0 # {a="b"} 0.5
 a_bucket{le="2.0"} 2 # {a="c"} 0.5
-a_bucket{le="+Inf"} 3 # {a="1234567890123456789012345678901234567890123456789012345678"} 4 123
+a_bucket{le="+Inf"} 3 # {a="2345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678"} 4 123
 # EOF
 """)
         hfm = HistogramMetricFamily("a", "help")
         hfm.add_sample("a_bucket", {"le": "1.0"}, 0.0, None, Exemplar({"a": "b"}, 0.5))
         hfm.add_sample("a_bucket", {"le": "2.0"}, 2.0, None, Exemplar({"a": "c"}, 0.5)),
         hfm.add_sample("a_bucket", {"le": "+Inf"}, 3.0, None,
-                       Exemplar({"a": "1234567890123456789012345678901234567890123456789012345678"}, 4,
+                       Exemplar({"a": "2345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678"}, 4,
                                 Timestamp(123, 0)))
         self.assertEqual([hfm], list(families))
 
@@ -468,6 +476,7 @@ a_bucket{le="+Inf",foo="bar # "} 3 # {a="d",foo="bar # bar"} 4
     @unittest.skipIf(sys.version_info < (3, 3), "Test requires Python 3.3+.")
     def test_fallback_to_state_machine_label_parsing(self):
         from unittest.mock import patch
+
         from prometheus_client.openmetrics.parser import _parse_sample
 
         parse_sample_function = "prometheus_client.openmetrics.parser._parse_sample"
@@ -598,6 +607,8 @@ foo_created 1.520430000123e+09
         for case in [
             # No EOF.
             (''),
+            # Blank line
+            ('a 1\n\n# EOF\n'),
             # Text after EOF.
             ('a 1\n# EOF\nblah'),
             ('a 1\n# EOFblah'),
@@ -692,7 +703,7 @@ foo_created 1.520430000123e+09
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 1 \n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 1 1 \n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # '
-             '{a="2345678901234567890123456789012345678901234567890123456789012345"} 1 1\n# EOF\n'),
+             '{a="23456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"} 1 1\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 0x1p-3\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 1 0x1p-3\n# EOF\n'),
             # Exemplars on unallowed samples.
@@ -715,7 +726,6 @@ foo_created 1.520430000123e+09
             ('# TYPE a summary\na{quantile="foo"} 0\n# EOF\n'),
             ('# TYPE a summary\na{quantile="1.01"} 0\n# EOF\n'),
             ('# TYPE a summary\na{quantile="NaN"} 0\n# EOF\n'),
-            ('# TYPE a summary\na{quantile="1"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket 0\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_bucket 0\n# EOF\n'),
             ('# TYPE a stateset\na 0\n# EOF\n'),
@@ -742,16 +752,13 @@ foo_created 1.520430000123e+09
             ('# TYPE a summary\na{quantile="0.5"} -1\n# EOF\n'),
             # Bad histograms.
             ('# TYPE a histogram\na_sum 1\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="+Inf"} 0\n#a_sum 0\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="+Inf"} 0\n#a_count 0\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_gsum 1\n# EOF\n'),
+            ('# TYPE a gaugehistogram\na_bucket{le="+Inf"} 0\na_gsum 0\n# EOF\n'),
+            ('# TYPE a gaugehistogram\na_bucket{le="+Inf"} 0\na_gcount 0\n# EOF\n'),
             ('# TYPE a histogram\na_count 1\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 0\na_count 1\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="0"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="1"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="0.0000000001"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="1.1e-2"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="1e-04"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="1e+05"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="10000000000"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+INF"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="2"} 0\na_bucket{le="1"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="1"} 1\na_bucket{le="2"} 1\na_bucket{le="+Inf"} 0\n# EOF\n'),
@@ -768,6 +775,10 @@ foo_created 1.520430000123e+09
             ('# TYPE a gauge\na 0 1\na 0 0\n# EOF\n'),
             ('# TYPE a gauge\na 0\na 0 0\n# EOF\n'),
             ('# TYPE a gauge\na 0 0\na 0\n# EOF\n'),
+            # Clashing names.
+            ('# TYPE a counter\n# TYPE a counter\n# EOF\n'),
+            ('# TYPE a info\n# TYPE a counter\n# EOF\n'),
+            ('# TYPE a_created gauge\n# TYPE a counter\n# EOF\n'),
         ]:
             with self.assertRaises(ValueError, msg=case):
                 list(text_string_to_metric_families(case))
