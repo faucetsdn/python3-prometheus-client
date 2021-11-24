@@ -1,14 +1,13 @@
 From: Federico Ceratto <federico@debian.org>
 Date: Tue, 3 Jan 2017 21:30:13 +0000
-Subject: Import unvendorized decorator.py
-Forwarded: no
+Updated: Sun, 27 Dec 2020 20:42:08 +0000
+Subject: Use packaged decorator.py
+Forwarded: not-needed
 
 ---
-Index: build/prometheus_client/context_managers.py
-===================================================================
---- build.orig/prometheus_client/context_managers.py
-+++ build/prometheus_client/context_managers.py
-@@ -2,7 +2,7 @@ from __future__ import unicode_literals
+--- a/prometheus_client/context_managers.py
++++ b/prometheus_client/context_managers.py
+@@ -2,7 +2,7 @@
  
  from timeit import default_timer
  
@@ -17,16 +16,21 @@ Index: build/prometheus_client/context_managers.py
  
  
  class ExceptionCounter(object):
-Index: build/tests/test_core.py
-===================================================================
---- build.orig/tests/test_core.py
-+++ build/tests/test_core.py
-@@ -11,7 +11,7 @@ from prometheus_client.core import (
+--- a/tests/test_core.py
++++ b/tests/test_core.py
+@@ -11,7 +11,14 @@
      HistogramMetricFamily, Info, InfoMetricFamily, Metric, Sample,
      StateSetMetricFamily, Summary, SummaryMetricFamily, UntypedMetricFamily,
  )
 -from prometheus_client.decorator import getargspec
-+from inspect import getargspec
++from inspect import getfullargspec
++
++
++def getargspec(f):
++    """A replacement for inspect.getargspec"""
++    spec = getfullargspec(f)
++    return spec.args, spec.varargs, spec.varkw, spec.defaults
++
  
  try:
      import unittest2 as unittest

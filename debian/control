@@ -1,45 +1,20 @@
 Source: python-prometheus-client
 Maintainer: Christopher Baines <mail@cbaines.net>
 Uploaders: Federico Ceratto <federico@debian.org>,
-           Martín Ferrari <tincho@debian.org>,
+           Martina Ferrari <tina@debian.org>,
 Section: python
 Priority: optional
-Build-Depends: debhelper (>= 10~),
+Build-Depends: debhelper (>= 11),
 Build-Depends-Indep: dh-python,
-                     python-all,
-                     python-concurrent.futures,
-                     python-decorator (>= 4.0.10),
-                     python-pytest,
-                     python-setuptools,
                      python3-all,
                      python3-decorator (>= 4.0.10),
                      python3-pytest,
                      python3-setuptools,
-Standards-Version: 4.3.0
+Rules-Requires-Root: no
+Standards-Version: 4.5.1
 Vcs-Browser: https://salsa.debian.org/debian/python-prometheus-client
 Vcs-Git: https://salsa.debian.org/debian/python-prometheus-client.git
 Homepage: https://github.com/prometheus/client_python
-
-Package: python-prometheus-client
-Architecture: all
-Depends: python-decorator (>= 4.0.10-1),
-         ${misc:Depends},
-         ${python:Depends},
-Description: Python 2 client for the Prometheus monitoring system
- This library provides an API for exporting metrics from a Python application.
- It provides classes for the metric types, and an HTTP server to expose the
- metrics to Prometheus.
- .
- When using Linux, the process CPU, RAM, file descriptor usage and start time
- will also be exported.
- .
- Along with the HTTP server to expose metrics, you can also write the metrics
- to a text file to be exported by the prometheus-node-exporter, or push them to
- the prometheus-pushgateway.
- .
- This library also includes support for re-exporting Graphite metrics to
- Prometheus, custom collectors to proxy metrics for other systems and a parser
- for the Prometheus text format.
 
 Package: python3-prometheus-client
 Architecture: all
