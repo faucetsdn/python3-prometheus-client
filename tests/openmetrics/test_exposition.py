@@ -1,7 +1,7 @@
 from __future__ import unicode_literals
 
-import sys
 import time
+import unittest
 
 from prometheus_client import (
     CollectorRegistry, Counter, Enum, Gauge, Histogram, Info, Metric, Summary,
@@ -10,12 +10,6 @@ from prometheus_client.core import (
     Exemplar, GaugeHistogramMetricFamily, Timestamp,
 )
 from prometheus_client.openmetrics.exposition import generate_latest
-
-if sys.version_info < (2, 7):
-    # We need the skip decorators from unittest2 on Python 2.6.
-    import unittest2 as unittest
-else:
-    import unittest
 
 
 class TestGenerateText(unittest.TestCase):
@@ -48,6 +42,12 @@ class TestGenerateText(unittest.TestCase):
         self.assertEqual(b'# HELP cc A counter\n# TYPE cc counter\ncc_total 1.0\ncc_created 123.456\n# EOF\n',
                          generate_latest(self.registry))
 
+    def test_counter_unit(self):
+        c = Counter('cc_seconds', 'A counter', registry=self.registry, unit="seconds")
+        c.inc()
+        self.assertEqual(b'# HELP cc_seconds A counter\n# TYPE cc_seconds counter\n# UNIT cc_seconds seconds\ncc_seconds_total 1.0\ncc_seconds_created 123.456\n# EOF\n',
+                         generate_latest(self.registry))
+
     def test_gauge(self):
         g = Gauge('gg', 'A gauge', registry=self.registry)
         g.set(17)
@@ -64,7 +64,6 @@ ss_created{a="c",b="d"} 123.456
 # EOF
 """, generate_latest(self.registry))
 
-    @unittest.skipIf(sys.version_info < (2, 7), "Test requires Python 2.7+.")
     def test_histogram(self):
         s = Histogram('hh', 'A histogram', registry=self.registry)
         s.observe(0.05)
@@ -108,29 +107,36 @@ hh_created 123.456
 """, generate_latest(self.registry))
 
     def test_histogram_exemplar(self):
-        class MyCollector(object):
-            def collect(self):
-                metric = Metric("hh", "help", 'histogram')
-                # This is not sane, but it covers all the cases.
-                metric.add_sample("hh_bucket", {"le": "1"}, 0, None, Exemplar({'a': 'b'}, 0.5))
-                metric.add_sample("hh_bucket", {"le": "2"}, 0, None, Exemplar({'le': '7'}, 0.5, 12))
-                metric.add_sample("hh_bucket", {"le": "3"}, 0, 123, Exemplar({'a': 'b'}, 2.5, 12))
-                metric.add_sample("hh_bucket", {"le": "4"}, 0, None, Exemplar({'a': '\n"\\'}, 3.5))
-                metric.add_sample("hh_bucket", {"le": "+Inf"}, 0, None, None)
-                yield metric
-
-        self.registry.register(MyCollector())
-        self.assertEqual(b"""# HELP hh help
+        s = Histogram('hh', 'A histogram', buckets=[1, 2, 3, 4], registry=self.registry)
+        s.observe(0.5, {'a': 'b'})
+        s.observe(1.5, {'le': '7'})
+        s.observe(2.5, {'a': 'b'})
+        s.observe(3.5, {'a': '\n"\\'})
+        print(generate_latest(self.registry))
+        self.assertEqual(b"""# HELP hh A histogram
 # TYPE hh histogram
-hh_bucket{le="1"} 0.0 # {a="b"} 0.5
-hh_bucket{le="2"} 0.0 # {le="7"} 0.5 12
-hh_bucket{le="3"} 0.0 123 # {a="b"} 2.5 12
-hh_bucket{le="4"} 0.0 # {a="\\n\\"\\\\"} 3.5
-hh_bucket{le="+Inf"} 0.0
+hh_bucket{le="1.0"} 1.0 # {a="b"} 0.5 123.456
+hh_bucket{le="2.0"} 2.0 # {le="7"} 1.5 123.456
+hh_bucket{le="3.0"} 3.0 # {a="b"} 2.5 123.456
+hh_bucket{le="4.0"} 4.0 # {a="\\n\\"\\\\"} 3.5 123.456
+hh_bucket{le="+Inf"} 4.0
+hh_count 4.0
+hh_sum 8.0
+hh_created 123.456
 # EOF
 """, generate_latest(self.registry))
 
-    def test_nonhistogram_exemplar(self):
+    def test_counter_exemplar(self):
+        c = Counter('cc', 'A counter', registry=self.registry)
+        c.inc(exemplar={'a': 'b'})
+        self.assertEqual(b"""# HELP cc A counter
+# TYPE cc counter
+cc_total 1.0 # {a="b"} 1.0 123.456
+cc_created 123.456
+# EOF
+""", generate_latest(self.registry))
+
+    def test_untyped_exemplar(self):
         class MyCollector(object):
             def collect(self):
                 metric = Metric("hh", "help", 'untyped')
@@ -142,12 +148,24 @@ hh_bucket{le="+Inf"} 0.0
         with self.assertRaises(ValueError):
             generate_latest(self.registry)
 
-    def test_nonhistogram_bucket_exemplar(self):
+    def test_histogram_non_bucket_exemplar(self):
         class MyCollector(object):
             def collect(self):
                 metric = Metric("hh", "help", 'histogram')
                 # This is not sane, but it covers all the cases.
                 metric.add_sample("hh_count", {}, 0, None, Exemplar({'a': 'b'}, 0.5))
+                yield metric
+
+        self.registry.register(MyCollector())
+        with self.assertRaises(ValueError):
+            generate_latest(self.registry)
+
+    def test_counter_non_total_exemplar(self):
+        class MyCollector(object):
+            def collect(self):
+                metric = Metric("cc", "A counter", 'counter')
+                metric.add_sample("cc_total", {}, 1, None, None)
+                metric.add_sample("cc_created", {}, 123.456, None, Exemplar({'a': 'b'}, 1.0, 123.456))
                 yield metric
 
         self.registry.register(MyCollector())

@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 
 import math
 import sys
+import unittest
 
 from prometheus_client.core import (
     CollectorRegistry, CounterMetricFamily, Exemplar,
@@ -11,12 +12,6 @@ from prometheus_client.core import (
 )
 from prometheus_client.openmetrics.exposition import generate_latest
 from prometheus_client.openmetrics.parser import text_string_to_metric_families
-
-if sys.version_info < (2, 7):
-    # We need the skip decorators from unittest2 on Python 2.6.
-    import unittest2 as unittest
-else:
-    import unittest
 
 
 class TestParse(unittest.TestCase):
@@ -221,6 +216,16 @@ a_total 0 123 # {a="b"} 0.5
         cfm.add_sample("a_total", {}, 0.0, Timestamp(123, 0), Exemplar({"a": "b"}, 0.5))
         self.assertEqual([cfm], list(families))
 
+    def test_counter_exemplars_empty_brackets(self):
+        families = text_string_to_metric_families("""# TYPE a counter
+# HELP a help
+a_total{} 0 123 # {a="b"} 0.5
+# EOF
+""")
+        cfm = CounterMetricFamily("a", "help")
+        cfm.add_sample("a_total", {}, 0.0, Timestamp(123, 0), Exemplar({"a": "b"}, 0.5))
+        self.assertEqual([cfm], list(families))
+
     def test_simple_info(self):
         families = text_string_to_metric_families("""# TYPE a info
 # HELP a help
@@ -409,11 +414,15 @@ a_total{foo="bar"} 1
 # HELP a he\\n\\\\l\\tp
 a_total{foo="b\\"a\\nr"} 1
 a_total{foo="b\\\\a\\z"} 2
+a_total{foo="b\\"a\\nr # "} 3
+a_total{foo="b\\\\a\\z # "} 4
 # EOF
 """)
         metric_family = CounterMetricFamily("a", "he\n\\l\\tp", labels=["foo"])
         metric_family.add_metric(["b\"a\nr"], 1)
         metric_family.add_metric(["b\\a\\z"], 2)
+        metric_family.add_metric(["b\"a\nr # "], 3)
+        metric_family.add_metric(["b\\a\\z # "], 4)
         self.assertEqual([metric_family], list(families))
 
     def test_null_byte(self):
@@ -535,7 +544,6 @@ a_total{foo="foo # bar"} 1
                     mock2.assert_not_called()
                     mock3.assert_called_once_with('1')
 
-    @unittest.skipIf(sys.version_info < (2, 7), "Test requires Python 2.7+.")
     def test_roundtrip(self):
         text = """# HELP go_gc_duration_seconds A summary of the GC invocation durations.
 # TYPE go_gc_duration_seconds summary
@@ -591,6 +599,10 @@ foo_bucket{le="+Inf"} 17.0
 foo_count 17.0
 foo_sum 324789.3
 foo_created 1.520430000123e+09
+# HELP bar histogram Testing with labels
+# TYPE bar histogram
+bar_bucket{a="b",le="+Inf"} 0.0
+bar_bucket{a="c",le="+Inf"} 0.0
 # EOF
 """
         families = list(text_string_to_metric_families(text))
@@ -628,9 +640,14 @@ foo_created 1.520430000123e+09
             ('a{a="1",b="2",} 1\n# EOF\n'),
             # Invalid labels.
             ('a{1="1"} 1\n# EOF\n'),
+            ('a{1="1"}1\n# EOF\n'),
             ('a{a="1",a="1"} 1\n# EOF\n'),
+            ('a{a="1"b} 1\n# EOF\n'),
             ('a{1=" # "} 1\n# EOF\n'),
             ('a{a=" # ",a=" # "} 1\n# EOF\n'),
+            ('a{a=" # "}1\n# EOF\n'),
+            ('a{a=" # ",b=}1\n# EOF\n'),
+            ('a{a=" # "b}1\n# EOF\n'),
             # Missing value.
             ('a\n# EOF\n'),
             ('a \n# EOF\n'),
@@ -667,6 +684,8 @@ foo_created 1.520430000123e+09
             ('# HELP a x\n# HELP a x\n# EOF\n'),
             ('# TYPE a untyped\n# TYPE a untyped\n# EOF\n'),
             ('# UNIT a_s s\n# UNIT a_s s\n# EOF\n'),
+            # Bad metadata.
+            ('# FOO a x\n# EOF\n'),
             # Bad metric names.
             ('0a 1\n# EOF\n'),
             ('a.b 1\n# EOF\n'),
@@ -706,6 +725,10 @@ foo_created 1.520430000123e+09
              '{a="23456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"} 1 1\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 0x1p-3\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 1 # {} 1 0x1p-3\n# EOF\n'),
+            ('# TYPE a counter\na_total 1 1 # {id="a"}  \n# EOF\n'),
+            ('# TYPE a counter\na_total 1 1 # id="a"} 1\n# EOF\n'),
+            ('# TYPE a counter\na_total 1 1 #id=" # "} 1\n# EOF\n'),
+            ('# TYPE a counter\na_total 1 1 id=" # "} 1\n# EOF\n'),
             # Exemplars on unallowed samples.
             ('# TYPE a histogram\na_sum 1 # {a="b"} 0.5\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_sum 1 # {a="b"} 0.5\n# EOF\n'),
@@ -750,13 +773,18 @@ foo_created 1.520430000123e+09
             ('# TYPE a summary\na_sum -1\n# EOF\n'),
             ('# TYPE a summary\na_count -1\n# EOF\n'),
             ('# TYPE a summary\na{quantile="0.5"} -1\n# EOF\n'),
+            # Bad info and stateset values.
+            ('# TYPE a info\na_info{foo="bar"} 2\n# EOF\n'),
+            ('# TYPE a stateset\na{a="bar"} 2\n# EOF\n'),
             # Bad histograms.
             ('# TYPE a histogram\na_sum 1\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="+Inf"} 0\n#a_sum 0\n# EOF\n'),
-            ('# TYPE a histogram\na_bucket{le="+Inf"} 0\n#a_count 0\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="+Inf"} 0\na_sum 0\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="+Inf"} 0\na_count 0\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket{le="-1"} 0\na_bucket{le="+Inf"} 0\na_sum 0\na_count 0\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_gsum 1\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_bucket{le="+Inf"} 0\na_gsum 0\n# EOF\n'),
             ('# TYPE a gaugehistogram\na_bucket{le="+Inf"} 0\na_gcount 0\n# EOF\n'),
+            ('# TYPE a gaugehistogram\na_bucket{le="+Inf"} 1\na_gsum -1\na_gcount 1\n# EOF\n'),
             ('# TYPE a histogram\na_count 1\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+Inf"} 0\na_count 1\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="+INF"} 0\n# EOF\n'),

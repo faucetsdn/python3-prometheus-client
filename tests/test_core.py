@@ -1,6 +1,8 @@
+# coding=utf-8
 from __future__ import unicode_literals
 
 from concurrent.futures import ThreadPoolExecutor
+import sys
 import time
 
 import pytest
@@ -19,6 +21,21 @@ except ImportError:
     import unittest
 
 
+def assert_not_observable(fn, *args, **kwargs):
+    """
+    Assert that a function call falls with a ValueError exception containing
+    'missing label values'
+    """
+
+    try:
+        fn(*args, **kwargs)
+    except ValueError as e:
+        assert 'missing label values' in str(e)
+        return
+
+    assert False, "Did not raise a 'missing label values' exception"
+
+
 class TestCounter(unittest.TestCase):
     def setUp(self):
         self.registry = CollectorRegistry()
@@ -30,13 +47,12 @@ class TestCounter(unittest.TestCase):
         self.assertEqual(1, self.registry.get_sample_value('c_total'))
         self.counter.inc(7)
         self.assertEqual(8, self.registry.get_sample_value('c_total'))
-    
+
     def test_repr(self):
         self.assertEqual(repr(self.counter), "prometheus_client.metrics.Counter(c)")
 
     def test_negative_increment_raises(self):
         self.assertRaises(ValueError, self.counter.inc, -1)
-    
 
     def test_function_decorator(self):
         @self.counter.count_exceptions(ValueError)
@@ -76,18 +92,43 @@ class TestCounter(unittest.TestCase):
 
     def test_count_exceptions_not_observable(self):
         counter = Counter('counter', 'help', labelnames=('label',), registry=self.registry)
+        assert_not_observable(counter.count_exceptions)
 
-        try:
-            counter.count_exceptions()
-        except ValueError as e:
-            self.assertIn('missing label values', str(e))
+    def test_inc_not_observable(self):
+        """.inc() must fail if the counter is not observable."""
+
+        counter = Counter('counter', 'help', labelnames=('label',), registry=self.registry)
+        assert_not_observable(counter.inc)
+
+    def test_exemplar_invalid_label_name(self):
+        self.assertRaises(ValueError, self.counter.inc, exemplar={':o)': 'smile'})
+        self.assertRaises(ValueError, self.counter.inc, exemplar={'1': 'number'})
+
+    def test_exemplar_unicode(self):
+        # 128 characters should not raise, even using characters larger than 1 byte.
+        self.counter.inc(exemplar={
+            'abcdefghijklmnopqrstuvwxyz': '26+16 characters',
+            'x123456': '7+15 characters',
+            'zyxwvutsrqponmlkjihgfedcba': '26+16 characters',
+            'unicode': '7+15 chars    平',
+        })
+
+    def test_exemplar_too_long(self):
+        # 129 characters should fail.
+        self.assertRaises(ValueError, self.counter.inc, exemplar={
+            'abcdefghijklmnopqrstuvwxyz': '26+16 characters',
+            'x1234567': '8+15 characters',
+            'zyxwvutsrqponmlkjihgfedcba': '26+16 characters',
+            'y123456': '7+15 characters',
+        })
 
 
 class TestGauge(unittest.TestCase):
     def setUp(self):
         self.registry = CollectorRegistry()
         self.gauge = Gauge('g', 'help', registry=self.registry)
-    
+        self.gauge_with_label = Gauge('g2', 'help', labelnames=("label1",), registry=self.registry)
+
     def test_repr(self):
         self.assertEqual(repr(self.gauge), "prometheus_client.metrics.Gauge(g)")
 
@@ -99,6 +140,21 @@ class TestGauge(unittest.TestCase):
         self.assertEqual(-2, self.registry.get_sample_value('g'))
         self.gauge.set(9)
         self.assertEqual(9, self.registry.get_sample_value('g'))
+
+    def test_inc_not_observable(self):
+        """.inc() must fail if the gauge is not observable."""
+
+        assert_not_observable(self.gauge_with_label.inc)
+
+    def test_dec_not_observable(self):
+        """.dec() must fail if the gauge is not observable."""
+
+        assert_not_observable(self.gauge_with_label.dec)
+
+    def test_set_not_observable(self):
+        """.set() must fail if the gauge is not observable."""
+
+        assert_not_observable(self.gauge_with_label.set, 1)
 
     def test_inprogress_function_decorator(self):
         self.assertEqual(0, self.registry.get_sample_value('g'))
@@ -126,6 +182,11 @@ class TestGauge(unittest.TestCase):
         self.assertEqual(0, self.registry.get_sample_value('g'))
         x['a'] = None
         self.assertEqual(1, self.registry.get_sample_value('g'))
+
+    def test_set_function_not_observable(self):
+        """.set_function() must fail if the gauge is not observable."""
+
+        assert_not_observable(self.gauge_with_label.set_function, lambda: 1)
 
     def test_time_function_decorator(self):
         self.assertEqual(0, self.registry.get_sample_value('g'))
@@ -167,25 +228,18 @@ class TestGauge(unittest.TestCase):
 
     def test_track_in_progress_not_observable(self):
         g = Gauge('test', 'help', labelnames=('label',), registry=self.registry)
-
-        try:
-            g.track_inprogress()
-        except ValueError as e:
-            self.assertIn('missing label values', str(e))
+        assert_not_observable(g.track_inprogress)
 
     def test_timer_not_observable(self):
         g = Gauge('test', 'help', labelnames=('label',), registry=self.registry)
-
-        try:
-            g.time()
-        except ValueError as e:
-            self.assertIn('missing label values', str(e))
+        assert_not_observable(g.time)
 
 
 class TestSummary(unittest.TestCase):
     def setUp(self):
         self.registry = CollectorRegistry()
         self.summary = Summary('s', 'help', registry=self.registry)
+        self.summary_with_labels = Summary('s_with_labels', 'help', labelnames=("label1",), registry=self.registry)
 
     def test_repr(self):
         self.assertEqual(repr(self.summary), "prometheus_client.metrics.Summary(s)")
@@ -196,6 +250,10 @@ class TestSummary(unittest.TestCase):
         self.summary.observe(10)
         self.assertEqual(1, self.registry.get_sample_value('s_count'))
         self.assertEqual(10, self.registry.get_sample_value('s_sum'))
+
+    def test_summary_not_observable(self):
+        """.observe() must fail if the Summary is not observable."""
+        assert_not_observable(self.summary_with_labels.observe, 1)
 
     def test_function_decorator(self):
         self.assertEqual(0, self.registry.get_sample_value('s_count'))
@@ -267,10 +325,7 @@ class TestSummary(unittest.TestCase):
     def test_timer_not_observable(self):
         s = Summary('test', 'help', labelnames=('label',), registry=self.registry)
 
-        try:
-            s.time()
-        except ValueError as e:
-            self.assertIn('missing label values', str(e))
+        assert_not_observable(s.time)
 
 
 class TestHistogram(unittest.TestCase):
@@ -314,6 +369,10 @@ class TestHistogram(unittest.TestCase):
         self.assertEqual(3, self.registry.get_sample_value('h_bucket', {'le': '+Inf'}))
         self.assertEqual(3, self.registry.get_sample_value('h_count'))
         self.assertEqual(float("inf"), self.registry.get_sample_value('h_sum'))
+
+    def test_histogram_not_observable(self):
+        """.observe() must fail if the Summary is not observable."""
+        assert_not_observable(self.labels.observe, 1)
 
     def test_setting_buckets(self):
         h = Histogram('h', 'help', registry=None, buckets=[0, 1, 2])
@@ -379,6 +438,19 @@ class TestHistogram(unittest.TestCase):
             pass
         self.assertEqual(1, self.registry.get_sample_value('h_count'))
         self.assertEqual(1, self.registry.get_sample_value('h_bucket', {'le': '+Inf'}))
+
+    def test_exemplar_invalid_label_name(self):
+        self.assertRaises(ValueError, self.histogram.observe, 3.0, exemplar={':o)': 'smile'})
+        self.assertRaises(ValueError, self.histogram.observe, 3.0, exemplar={'1': 'number'})
+
+    def test_exemplar_too_long(self):
+        # 129 characters in total should fail.
+        self.assertRaises(ValueError, self.histogram.observe, 1.0, exemplar={
+            'abcdefghijklmnopqrstuvwxyz': '26+16 characters',
+            'x1234567': '8+15 characters',
+            'zyxwvutsrqponmlkjihgfedcba': '26+16 characters',
+            'y123456': '7+15 characters',
+        })
 
 
 class TestInfo(unittest.TestCase):
@@ -455,6 +527,15 @@ class TestMetricWrapper(unittest.TestCase):
         self.counter.remove('x')
         self.assertEqual(None, self.registry.get_sample_value('c_total', {'l': 'x'}))
         self.assertEqual(2, self.registry.get_sample_value('c_total', {'l': 'y'}))
+
+    def test_clear(self):
+        self.counter.labels('x').inc()
+        self.counter.labels('y').inc(2)
+        self.assertEqual(1, self.registry.get_sample_value('c_total', {'l': 'x'}))
+        self.assertEqual(2, self.registry.get_sample_value('c_total', {'l': 'y'}))
+        self.counter.clear()
+        self.assertEqual(None, self.registry.get_sample_value('c_total', {'l': 'x'}))
+        self.assertEqual(None, self.registry.get_sample_value('c_total', {'l': 'y'}))
 
     def test_incorrect_label_count_raises(self):
         self.assertRaises(ValueError, self.counter.labels)
@@ -752,7 +833,19 @@ class TestCollectorRegistry(unittest.TestCase):
 
         m = Metric('s', 'help', 'summary')
         m.samples = [Sample('s_sum', {}, 7)]
-        self.assertEqual([m], registry.restricted_registry(['s_sum']).collect())
+        self.assertEqual([m], list(registry.restricted_registry(['s_sum']).collect()))
+
+    def test_restricted_registry_adds_new_metrics(self):
+        registry = CollectorRegistry()
+        Counter('c_total', 'help', registry=registry)
+
+        restricted_registry = registry.restricted_registry(['s_sum'])
+
+        Summary('s', 'help', registry=registry).observe(7)
+        m = Metric('s', 'help', 'summary')
+        m.samples = [Sample('s_sum', {}, 7)]
+
+        self.assertEqual([m], list(restricted_registry.collect()))
 
     def test_target_info_injected(self):
         registry = CollectorRegistry(target_info={'foo': 'bar'})
@@ -776,11 +869,38 @@ class TestCollectorRegistry(unittest.TestCase):
 
         m = Metric('s', 'help', 'summary')
         m.samples = [Sample('s_sum', {}, 7)]
-        self.assertEqual([m], registry.restricted_registry(['s_sum']).collect())
+        self.assertEqual([m], list(registry.restricted_registry(['s_sum']).collect()))
 
         m = Metric('target', 'Target metadata', 'info')
         m.samples = [Sample('target_info', {'foo': 'bar'}, 1)]
-        self.assertEqual([m], registry.restricted_registry(['target_info']).collect())
+        self.assertEqual([m], list(registry.restricted_registry(['target_info']).collect()))
+
+    @unittest.skipIf(sys.version_info < (3, 3), "Test requires Python 3.3+.")
+    def test_restricted_registry_does_not_call_extra(self):
+        from unittest.mock import MagicMock
+        registry = CollectorRegistry()
+        mock_collector = MagicMock()
+        mock_collector.describe.return_value = [Metric('foo', 'help', 'summary')]
+        registry.register(mock_collector)
+        Summary('s', 'help', registry=registry).observe(7)
+
+        m = Metric('s', 'help', 'summary')
+        m.samples = [Sample('s_sum', {}, 7)]
+        self.assertEqual([m], list(registry.restricted_registry(['s_sum']).collect()))
+        mock_collector.collect.assert_not_called()
+
+    def test_restricted_registry_does_not_yield_while_locked(self):
+        registry = CollectorRegistry(target_info={'foo': 'bar'})
+        Summary('s', 'help', registry=registry).observe(7)
+
+        m = Metric('s', 'help', 'summary')
+        m.samples = [Sample('s_sum', {}, 7)]
+        self.assertEqual([m], list(registry.restricted_registry(['s_sum']).collect()))
+
+        m = Metric('target', 'Target metadata', 'info')
+        m.samples = [Sample('target_info', {'foo': 'bar'}, 1)]
+        for _ in registry.restricted_registry(['target_info', 's_sum']).collect():
+            self.assertFalse(registry._lock.locked())
 
 
 if __name__ == '__main__':

@@ -1,18 +1,14 @@
 from os import path
-import sys
 
 from setuptools import setup
 
-if sys.version_info >= (2, 7):
-    with open(path.join(path.abspath(path.dirname(__file__)), 'README.md')) as f:
-        long_description = f.read()
-else:  # Assuming we don't run setup in order to publish under python 2.6
-    long_description = "NA"
+with open(path.join(path.abspath(path.dirname(__file__)), 'README.md')) as f:
+    long_description = f.read()
 
 
 setup(
     name="prometheus_client",
-    version="0.9.0",
+    version="0.12.0",
     author="Brian Brazil",
     author_email="brian.brazil@robustperception.io",
     description="Python client for the Prometheus monitoring system.",
@@ -31,6 +27,7 @@ setup(
         'twisted': ['twisted'],
     },
     test_suite="tests",
+    python_requires=">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -38,7 +35,6 @@ setup(
         "Intended Audience :: System Administrators",
         "Programming Language :: Python",
         "Programming Language :: Python :: 2",
-        "Programming Language :: Python :: 2.6",
         "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.4",
@@ -47,6 +43,7 @@ setup(
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: Implementation :: CPython",
         "Programming Language :: Python :: Implementation :: PyPy",
         "Topic :: System :: Monitoring",

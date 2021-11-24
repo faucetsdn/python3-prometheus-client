@@ -6,7 +6,7 @@ The official Python 2 and 3 client for [Prometheus](http://prometheus.io).
 
 **One**: Install the client:
 ```
-pip install prometheus_client
+pip install prometheus-client
 ```
 
 **Two**: Paste the following into a Python interpreter:
@@ -231,6 +231,27 @@ c.labels('get', '/')
 c.labels('post', '/submit')
 ```
 
+### Exemplars
+
+Exemplars can be added to counter and histogram metrics. Exemplars can be
+specified by passing a dict of label value pairs to be exposed as the exemplar.
+For example with a counter:
+
+```python
+from prometheus_client import Counter
+c = Counter('my_requests_total', 'HTTP Failures', ['method', 'endpoint'])
+c.labels('get', '/').inc(exemplar={'trace_id': 'abc123'})
+c.labels('post', '/submit').inc(1.0, {'trace_id': 'def456'})
+```
+
+And with a histogram:
+
+```python
+from prometheus_client import Histogram
+h = Histogram('request_latency_seconds', 'Description of histogram')
+h.observe(4.7, {'trace_id': 'abc123'})
+```
+
 ### Process Collector
 
 The Python client automatically exports metrics about process CPU usage, RAM,
@@ -447,6 +468,17 @@ gb.push()
 gb.start(10.0)
 ```
 
+Graphite [tags](https://grafana.com/blog/2018/01/11/graphite-1.1-teaching-an-old-dog-new-tricks/) are also supported.
+
+```python
+from prometheus_client.bridge.graphite import GraphiteBridge
+
+gb = GraphiteBridge(('graphite.your.org', 2003), tags=True)
+c = Counter('my_requests_total', 'HTTP Failures', ['method', 'endpoint'])
+c.labels('get', '/').inc()
+gb.push()
+```
+
 ## Custom Collectors
 
 Sometimes it is not possible to directly instrument code, as it is not
@@ -468,7 +500,7 @@ class CustomCollector(object):
 REGISTRY.register(CustomCollector())
 ```
 
-`SummaryMetricFamily` and `HistogramMetricFamily` work similarly.
+`SummaryMetricFamily`, `HistogramMetricFamily` and `InfoMetricFamily` work similarly.
 
 A collector may implement a `describe` method which returns metrics in the same
 format as `collect` (though you don't have to include the samples). This is
@@ -483,7 +515,7 @@ implement a proper `describe`, or if that's not practical have `describe`
 return an empty list.
 
 
-## Multiprocess Mode (Gunicorn)
+## Multiprocess Mode (E.g. Gunicorn)
 
 Prometheus client libraries presume a threaded model, where metrics are shared
 across workers. This doesn't work so well for languages such as Python where
@@ -493,30 +525,39 @@ To handle this the client library can be put in multiprocess mode.
 This comes with a number of limitations:
 
 - Registries can not be used as normal, all instantiated metrics are exported
+  - Registering metrics to a registry later used by a `MultiProcessCollector`
+    may cause duplicate metrics to be exported
 - Custom collectors do not work (e.g. cpu and memory metrics)
 - Info and Enum metrics do not work
 - The pushgateway cannot be used
 - Gauges cannot use the `pid` label
+- Exemplars are not supported
 
 There's several steps to getting this working:
 
-**1. Gunicorn deployment**:
+**1. Deployment**:
 
-The `prometheus_multiproc_dir` environment variable must be set to a directory
+The `PROMETHEUS_MULTIPROC_DIR` environment variable must be set to a directory
 that the client library can use for metrics. This directory must be wiped
-between Gunicorn runs (before startup is recommended).
+between process/Gunicorn runs (before startup is recommended).
 
 This environment variable should be set from a start-up shell script,
 and not directly from Python (otherwise it may not propagate to child processes).
 
 **2. Metrics collector**:
 
-The application must initialize a new `CollectorRegistry`,
-and store the multi-process collector inside.
+The application must initialize a new `CollectorRegistry`, and store the
+multi-process collector inside. It is a best practice to create this registry
+inside the context of a request to avoid metrics registering themselves to a
+collector used by a `MultiProcessCollector`. If a registry with metrics
+registered is used by a `MultiProcessCollector` duplicate metrics may be
+exported, one for multiprocess, and one for the process serving the request.
 
 ```python
 from prometheus_client import multiprocess
-from prometheus_client import generate_latest, CollectorRegistry, CONTENT_TYPE_LATEST
+from prometheus_client import generate_latest, CollectorRegistry, CONTENT_TYPE_LATEST, Counter
+
+MY_COUNTER = Counter('my_counter', 'Description of my counter')
 
 # Expose metrics.
 def app(environ, start_response):
@@ -575,3 +616,8 @@ for family in text_string_to_metric_families(u"my_gauge 1.0\n"):
   for sample in family.samples:
     print("Name: {0} Labels: {1} Value: {2}".format(*sample))
 ```
+
+## Links
+
+* [Releases](https://github.com/prometheus/client_python/releases): The releases page shows the history of the project and acts as a changelog.
+* [PyPI](https://pypi.python.org/pypi/prometheus_client)

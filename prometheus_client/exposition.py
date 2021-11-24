@@ -17,20 +17,83 @@ try:
 
     from BaseHTTPServer import BaseHTTPRequestHandler
     from SocketServer import ThreadingMixIn
-    from urllib2 import build_opener, HTTPHandler, Request
+    from urllib2 import (
+        build_opener, HTTPError, HTTPHandler, HTTPRedirectHandler, Request,
+    )
     from urlparse import parse_qs, urlparse
 except ImportError:
     # Python 3
     from http.server import BaseHTTPRequestHandler
     from socketserver import ThreadingMixIn
+    from urllib.error import HTTPError
     from urllib.parse import parse_qs, quote_plus, urlparse
-    from urllib.request import build_opener, HTTPHandler, Request
+    from urllib.request import (
+        build_opener, HTTPHandler, HTTPRedirectHandler, Request,
+    )
 
 CONTENT_TYPE_LATEST = str('text/plain; version=0.0.4; charset=utf-8')
 """Content type of the latest text format"""
-
-PYTHON26_OR_OLDER = sys.version_info < (2, 7)
+PYTHON27_OR_OLDER = sys.version_info < (3, )
 PYTHON376_OR_NEWER = sys.version_info > (3, 7, 5)
+
+
+class _PrometheusRedirectHandler(HTTPRedirectHandler):
+    """
+    Allow additional methods (e.g. PUT) and data forwarding in redirects.
+
+    Use of this class constitute a user's explicit agreement to the
+    redirect responses the Prometheus client will receive when using it.
+    You should only use this class if you control or otherwise trust the
+    redirect behavior involved and are certain it is safe to full transfer
+    the original request (method and data) to the redirected URL. For
+    example, if you know there is a cosmetic URL redirect in front of a
+    local deployment of a Prometheus server, and all redirects are safe,
+    this is the class to use to handle redirects in that case.
+
+    The standard HTTPRedirectHandler does not forward request data nor
+    does it allow redirected PUT requests (which Prometheus uses for some
+    operations, for example `push_to_gateway`) because these cannot
+    generically guarantee no violations of HTTP RFC 2616 requirements for
+    the user to explicitly confirm redirects that could have unexpected
+    side effects (such as rendering a PUT request non-idempotent or
+    creating multiple resources not named in the original request).
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """
+        Apply redirect logic to a request.
+
+        See parent HTTPRedirectHandler.redirect_request for parameter info.
+
+        If the redirect is disallowed, this raises the corresponding HTTP error.
+        If the redirect can't be determined, return None to allow other handlers
+        to try. If the redirect is allowed, return the new request.
+
+        This method specialized for the case when (a) the user knows that the
+        redirect will not cause unacceptable side effects for any request method,
+        and (b) the user knows that any request data should be passed through to
+        the redirect. If either condition is not met, this should not be used.
+        """
+        # note that requests being provided by a handler will use get_method to
+        # indicate the method, by monkeypatching this, instead of setting the
+        # Request object's method attribute.
+        m = getattr(req, "method", req.get_method())
+        if not (code in (301, 302, 303, 307) and m in ("GET", "HEAD")
+                or code in (301, 302, 303) and m in ("POST", "PUT")):
+            raise HTTPError(req.full_url, code, msg, headers, fp)
+        new_request = Request(
+            newurl.replace(' ', '%20'),  # space escaping in new url if needed.
+            headers=req.headers,
+            origin_req_host=req.origin_req_host,
+            unverifiable=True,
+            data=req.data,
+        )
+        if PYTHON27_OR_OLDER:
+            # the `method` attribute did not exist for Request in Python 2.7.
+            new_request.get_method = lambda: m
+        else:
+            new_request.method = m
+        return new_request
 
 
 def _bake_output(registry, accept_header, params):
@@ -49,8 +112,14 @@ def make_wsgi_app(registry=REGISTRY):
         # Prepare parameters
         accept_header = environ.get('HTTP_ACCEPT')
         params = parse_qs(environ.get('QUERY_STRING', ''))
-        # Bake output
-        status, header, output = _bake_output(registry, accept_header, params)
+        if environ['PATH_INFO'] == '/favicon.ico':
+            # Serve empty response for browsers
+            status = str('200 OK')
+            header = (str(''), str(''))
+            output = b''
+        else:
+            # Bake output
+            status, header, output = _bake_output(registry, accept_header, params)
         # Return output
         start_response(status, [header])
         return [output]
@@ -141,7 +210,7 @@ def generate_latest(registry=REGISTRY):
             raise
 
         for suffix, lines in sorted(om_samples.items()):
-            output.append('# HELP {0}{1} {2}\n'.format(metric.name, suffix, 
+            output.append('# HELP {0}{1} {2}\n'.format(metric.name, suffix,
                                                        metric.documentation.replace('\\', r'\\').replace('\n', r'\n')))
             output.append('# TYPE {0}{1} gauge\n'.format(metric.name, suffix))
             output.extend(lines)
@@ -201,8 +270,39 @@ def write_to_textfile(path, registry):
     tmppath = '%s.%s.%s' % (path, os.getpid(), threading.current_thread().ident)
     with open(tmppath, 'wb') as f:
         f.write(generate_latest(registry))
-    # rename(2) is atomic.
-    os.rename(tmppath, path)
+    
+    # rename(2) is atomic but fails on Windows if the destination file exists
+    if os.name == 'nt':
+        if sys.version_info <= (3, 3):
+            # Unable to guarantee atomic rename on Windows and Python<3.3
+            # Remove and rename instead (risks losing the file)
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
+            os.rename(tmppath, path)
+        else:
+            # os.replace is introduced in Python 3.3 but there is some dispute whether
+            # it is a truly atomic file operation: https://bugs.python.org/issue8828
+            os.replace(tmppath, path)
+    else:
+        os.rename(tmppath, path)
+
+
+def _make_handler(url, method, timeout, headers, data, base_handler):
+
+    def handle():
+        request = Request(url, data=data)
+        request.get_method = lambda: method
+        for k, v in headers:
+            request.add_header(k, v)
+        resp = build_opener(base_handler).open(request, timeout=timeout)
+        if resp.code >= 400:
+            raise IOError("error talking to pushgateway: {0} {1}".format(
+                resp.code, resp.msg))
+
+    return handle
 
 
 def default_handler(url, method, timeout, headers, data):
@@ -210,17 +310,21 @@ def default_handler(url, method, timeout, headers, data):
 
     Used by the push_to_gateway functions. Can be re-used by other handlers."""
 
-    def handle():
-        request = Request(url, data=data)
-        request.get_method = lambda: method
-        for k, v in headers:
-            request.add_header(k, v)
-        resp = build_opener(HTTPHandler).open(request, timeout=timeout)
-        if resp.code >= 400:
-            raise IOError("error talking to pushgateway: {0} {1}".format(
-                resp.code, resp.msg))
+    return _make_handler(url, method, timeout, headers, data, HTTPHandler)
 
-    return handle
+
+def passthrough_redirect_handler(url, method, timeout, headers, data):
+    """
+    Handler that automatically trusts redirect responses for all HTTP methods.
+
+    Augments standard HTTPRedirectHandler capability by permitting PUT requests,
+    preserving the method upon redirect, and passing through all headers and
+    data from the original request. Only use this handler if you control or
+    trust the source of redirect responses you encounter when making requests
+    via the Prometheus client. This handler will simply repeat the identical
+    request, including same method and data, to the new redirect URL."""
+
+    return _make_handler(url, method, timeout, headers, data, _PrometheusRedirectHandler)
 
 
 def basic_auth_handler(url, method, timeout, headers, data, username=None, password=None):
@@ -340,7 +444,7 @@ def _use_gateway(method, gateway, job, registry, grouping_key, timeout, handler)
     gateway_url = urlparse(gateway)
     # See https://bugs.python.org/issue27657 for details on urlparse in py>=3.7.6.
     if not gateway_url.scheme or (
-            (PYTHON376_OR_NEWER or PYTHON26_OR_OLDER)
+            PYTHON376_OR_NEWER
             and gateway_url.scheme not in ['http', 'https']
     ):
         gateway = 'http://{0}'.format(gateway)
@@ -376,7 +480,16 @@ def _escape_grouping_key(k, v):
 def instance_ip_grouping_key():
     """Grouping key with instance set to the IP Address of this host."""
     with closing(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) as s:
-        s.connect(('localhost', 0))
+        if sys.platform == 'darwin':
+            # This check is done this way only on MacOS devices
+            # it is done this way because the localhost method does
+            # not work.
+            # This method was adapted from this StackOverflow answer:
+            # https://stackoverflow.com/a/28950776
+            s.connect(('10.255.255.255', 1))
+        else:
+            s.connect(('localhost', 0))
+
         return {'instance': s.getsockname()[0]}
 
 
