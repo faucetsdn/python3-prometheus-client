@@ -19,6 +19,12 @@ jobs:
       - checkout
       - run: pip install tox
       - run: tox -e isort
+  mypy_lint:
+    executor: python
+    steps:
+      - checkout
+      - run: pip install tox
+      - run: tox -e mypy
   test:
     parameters:
       python:
@@ -64,13 +70,11 @@ workflows:
     jobs:
       - flake8_lint
       - isort_lint
+      - mypy_lint
       - test:
           matrix:
             parameters:
                python:
-                 - "2.7"
-                 - "3.4"
-                 - "3.5"
                  - "3.6"
                  - "3.7"
                  - "3.8"
@@ -80,11 +84,9 @@ workflows:
           matrix:
             parameters:
                python:
-                 - "2.7"
                  - "3.9"
       - test_pypy:
           matrix:
             parameters:
                python:
-                 - "2.7"
                  - "3.7"
