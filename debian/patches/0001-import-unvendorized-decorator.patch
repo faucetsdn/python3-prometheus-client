@@ -5,20 +5,24 @@ Subject: Use packaged decorator.py
 Forwarded: not-needed
 
 ---
---- a/prometheus_client/context_managers.py
-+++ b/prometheus_client/context_managers.py
-@@ -2,7 +2,7 @@
- 
- from timeit import default_timer
+Index: python3-prometheus-client/prometheus_client/context_managers.py
+===================================================================
+--- python3-prometheus-client.orig/prometheus_client/context_managers.py
++++ python3-prometheus-client/prometheus_client/context_managers.py
+@@ -6,7 +6,7 @@ from typing import Any, Callable, Option
+ if sys.version_info >= (3, 8, 0):
+     from typing import Literal
  
 -from .decorator import decorate
 +from decorator import decorate
  
- 
- class ExceptionCounter(object):
---- a/tests/test_core.py
-+++ b/tests/test_core.py
-@@ -11,7 +11,14 @@
+ if TYPE_CHECKING:
+     from . import Counter
+Index: python3-prometheus-client/tests/test_core.py
+===================================================================
+--- python3-prometheus-client.orig/tests/test_core.py
++++ python3-prometheus-client/tests/test_core.py
+@@ -10,7 +10,14 @@ from prometheus_client.core import (
      HistogramMetricFamily, Info, InfoMetricFamily, Metric, Sample,
      StateSetMetricFamily, Summary, SummaryMetricFamily, UntypedMetricFamily,
  )
@@ -32,5 +36,5 @@ Forwarded: not-needed
 +    return spec.args, spec.varargs, spec.varkw, spec.defaults
 +
  
- try:
-     import unittest2 as unittest
+ 
+ def assert_not_observable(fn, *args, **kwargs):

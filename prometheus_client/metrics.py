@@ -1,7 +1,9 @@
-import sys
 from threading import Lock
 import time
 import types
+from typing import (
+    Any, Callable, Dict, Iterable, Optional, Sequence, Type, TypeVar,
+)
 
 from . import values  # retain this import style for testability
 from .context_managers import ExceptionCounter, InprogressTracker, Timer
@@ -9,16 +11,12 @@ from .metrics_core import (
     Metric, METRIC_LABEL_NAME_RE, METRIC_NAME_RE,
     RESERVED_METRIC_LABEL_NAME_RE,
 )
-from .registry import REGISTRY
-from .samples import Exemplar
+from .registry import CollectorRegistry, REGISTRY
+from .samples import Exemplar, Sample
 from .utils import floatToGoString, INF
 
-if sys.version_info > (3,):
-    unicode = str
-    create_bound_method = types.MethodType
-else:
-    def create_bound_method(func, obj):
-        return types.MethodType(func, obj, obj.__class__)
+T = TypeVar('T', bound='MetricWrapperBase')
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 def _build_full_name(metric_type, name, namespace, subsystem, unit):
@@ -63,9 +61,9 @@ def _validate_exemplar(exemplar):
         raise ValueError('Exemplar labels have %d UTF-8 characters, exceeding the limit of 128')
 
 
-class MetricWrapperBase(object):
-    _type = None
-    _reserved_labelnames = ()
+class MetricWrapperBase:
+    _type: Optional[str] = None
+    _reserved_labelnames: Sequence[str] = ()
 
     def _is_observable(self):
         # Whether this metric is observable, i.e.
@@ -96,26 +94,26 @@ class MetricWrapperBase(object):
         return [metric]
 
     def __str__(self):
-        return "{0}:{1}".format(self._type, self._name)
+        return f"{self._type}:{self._name}"
 
     def __repr__(self):
         metric_type = type(self)
-        return "{0}.{1}({2})".format(metric_type.__module__, metric_type.__name__, self._name)
+        return f"{metric_type.__module__}.{metric_type.__name__}({self._name})"
 
-    def __init__(self,
-                 name,
-                 documentation,
-                 labelnames=(),
-                 namespace='',
-                 subsystem='',
-                 unit='',
-                 registry=REGISTRY,
-                 _labelvalues=None,
-                 ):
+    def __init__(self: T,
+                 name: str,
+                 documentation: str,
+                 labelnames: Iterable[str] = (),
+                 namespace: str = '',
+                 subsystem: str = '',
+                 unit: str = '',
+                 registry: Optional[CollectorRegistry] = REGISTRY,
+                 _labelvalues: Optional[Sequence[str]] = None,
+                 ) -> None:
         self._name = _build_full_name(self._type, name, namespace, subsystem, unit)
         self._labelnames = _validate_labelnames(self, labelnames)
         self._labelvalues = tuple(_labelvalues or ())
-        self._kwargs = {}
+        self._kwargs: Dict[str, Any] = {}
         self._documentation = documentation
         self._unit = unit
 
@@ -125,7 +123,7 @@ class MetricWrapperBase(object):
         if self._is_parent():
             # Prepare the fields needed for child metrics.
             self._lock = Lock()
-            self._metrics = {}
+            self._metrics: Dict[Sequence[str], T] = {}
 
         if self._is_observable():
             self._metric_init()
@@ -135,7 +133,7 @@ class MetricWrapperBase(object):
             if registry:
                 registry.register(self)
 
-    def labels(self, *labelvalues, **labelkwargs):
+    def labels(self: T, *labelvalues: Any, **labelkwargs: Any) -> T:
         """Return the child for the given labelset.
 
         All metrics can have labels, allowing grouping of related time series.
@@ -162,7 +160,7 @@ class MetricWrapperBase(object):
             raise ValueError('No label names were set when constructing %s' % self)
 
         if self._labelvalues:
-            raise ValueError('%s already has labels set (%s); can not chain calls to .labels()' % (
+            raise ValueError('{} already has labels set ({}); can not chain calls to .labels()'.format(
                 self,
                 dict(zip(self._labelnames, self._labelvalues))
             ))
@@ -173,11 +171,11 @@ class MetricWrapperBase(object):
         if labelkwargs:
             if sorted(labelkwargs) != sorted(self._labelnames):
                 raise ValueError('Incorrect label names')
-            labelvalues = tuple(unicode(labelkwargs[l]) for l in self._labelnames)
+            labelvalues = tuple(str(labelkwargs[l]) for l in self._labelnames)
         else:
             if len(labelvalues) != len(self._labelnames):
                 raise ValueError('Incorrect label count')
-            labelvalues = tuple(unicode(l) for l in labelvalues)
+            labelvalues = tuple(str(l) for l in labelvalues)
         with self._lock:
             if labelvalues not in self._metrics:
                 self._metrics[labelvalues] = self.__class__(
@@ -197,30 +195,30 @@ class MetricWrapperBase(object):
         """Remove the given labelset from the metric."""
         if len(labelvalues) != len(self._labelnames):
             raise ValueError('Incorrect label count (expected %d, got %s)' % (len(self._labelnames), labelvalues))
-        labelvalues = tuple(unicode(l) for l in labelvalues)
+        labelvalues = tuple(str(l) for l in labelvalues)
         with self._lock:
             del self._metrics[labelvalues]
 
-    def clear(self):
+    def clear(self) -> None:
         """Remove all labelsets from the metric"""
         with self._lock:
             self._metrics = {}
 
-    def _samples(self):
+    def _samples(self) -> Iterable[Sample]:
         if self._is_parent():
             return self._multi_samples()
         else:
             return self._child_samples()
 
-    def _multi_samples(self):
+    def _multi_samples(self) -> Iterable[Sample]:
         with self._lock:
             metrics = self._metrics.copy()
         for labels, metric in metrics.items():
             series_labels = list(zip(self._labelnames, labels))
             for suffix, sample_labels, value, timestamp, exemplar in metric._samples():
-                yield (suffix, dict(series_labels + list(sample_labels.items())), value, timestamp, exemplar)
+                yield Sample(suffix, dict(series_labels + list(sample_labels.items())), value, timestamp, exemplar)
 
-    def _child_samples(self):  # pragma: no cover
+    def _child_samples(self) -> Iterable[Sample]:  # pragma: no cover
         raise NotImplementedError('_child_samples() must be implemented by %r' % self)
 
     def _metric_init(self):  # pragma: no cover
@@ -266,12 +264,12 @@ class Counter(MetricWrapperBase):
     """
     _type = 'counter'
 
-    def _metric_init(self):
+    def _metric_init(self) -> None:
         self._value = values.ValueClass(self._type, self._name, self._name + '_total', self._labelnames,
                                         self._labelvalues)
         self._created = time.time()
 
-    def inc(self, amount=1, exemplar=None):
+    def inc(self, amount: float = 1, exemplar: Optional[Dict[str, str]] = None) -> None:
         """Increment counter by the given amount."""
         self._raise_if_not_observable()
         if amount < 0:
@@ -281,7 +279,7 @@ class Counter(MetricWrapperBase):
             _validate_exemplar(exemplar)
             self._value.set_exemplar(Exemplar(exemplar, amount, time.time()))
 
-    def count_exceptions(self, exception=Exception):
+    def count_exceptions(self, exception: Type[BaseException] = Exception) -> ExceptionCounter:
         """Count exceptions in a block of code or function.
 
         Can be used as a function decorator or context manager.
@@ -291,10 +289,10 @@ class Counter(MetricWrapperBase):
         self._raise_if_not_observable()
         return ExceptionCounter(self, exception)
 
-    def _child_samples(self):
+    def _child_samples(self) -> Iterable[Sample]:
         return (
-            ('_total', {}, self._value.get(), None, self._value.get_exemplar()),
-            ('_created', {}, self._created, None, None),
+            Sample('_total', {}, self._value.get(), None, self._value.get_exemplar()),
+            Sample('_created', {}, self._created, None, None),
         )
 
 
@@ -352,7 +350,7 @@ class Gauge(MetricWrapperBase):
         self._multiprocess_mode = multiprocess_mode
         if multiprocess_mode not in self._MULTIPROC_MODES:
             raise ValueError('Invalid multiprocess mode: ' + multiprocess_mode)
-        super(Gauge, self).__init__(
+        super().__init__(
             name=name,
             documentation=documentation,
             labelnames=labelnames,
@@ -404,8 +402,7 @@ class Gauge(MetricWrapperBase):
 
         Can be used as a function decorator or context manager.
         """
-        self._raise_if_not_observable()
-        return Timer(self.set)
+        return Timer(self, 'set')
 
     def set_function(self, f):
         """Call the provided function to return the Gauge value.
@@ -416,13 +413,13 @@ class Gauge(MetricWrapperBase):
 
         self._raise_if_not_observable()
 
-        def samples(self):
-            return (('', {}, float(f()), None, None),)
+        def samples(self) -> Iterable[Sample]:
+            return (Sample('', {}, float(f()), None, None),)
 
-        self._child_samples = create_bound_method(samples, self)
+        self._child_samples = types.MethodType(samples, self)
 
-    def _child_samples(self):
-        return (('', {}, self._value.get(), None, None),)
+    def _child_samples(self) -> Iterable[Sample]:
+        return (Sample('', {}, self._value.get(), None, None),)
 
 
 class Summary(MetricWrapperBase):
@@ -483,14 +480,13 @@ class Summary(MetricWrapperBase):
 
         Can be used as a function decorator or context manager.
         """
-        self._raise_if_not_observable()
-        return Timer(self.observe)
+        return Timer(self, 'observe')
 
-    def _child_samples(self):
+    def _child_samples(self) -> Iterable[Sample]:
         return (
-            ('_count', {}, self._count.get(), None, None),
-            ('_sum', {}, self._sum.get(), None, None),
-            ('_created', {}, self._created, None, None),
+            Sample('_count', {}, self._count.get(), None, None),
+            Sample('_sum', {}, self._sum.get(), None, None),
+            Sample('_created', {}, self._created, None, None),
         )
 
 
@@ -545,7 +541,7 @@ class Histogram(MetricWrapperBase):
                  buckets=DEFAULT_BUCKETS,
                  ):
         self._prepare_buckets(buckets)
-        super(Histogram, self).__init__(
+        super().__init__(
             name=name,
             documentation=documentation,
             labelnames=labelnames,
@@ -608,18 +604,18 @@ class Histogram(MetricWrapperBase):
 
         Can be used as a function decorator or context manager.
         """
-        return Timer(self.observe)
+        return Timer(self, 'observe')
 
-    def _child_samples(self):
+    def _child_samples(self) -> Iterable[Sample]:
         samples = []
         acc = 0
         for i, bound in enumerate(self._upper_bounds):
             acc += self._buckets[i].get()
-            samples.append(('_bucket', {'le': floatToGoString(bound)}, acc, None, self._buckets[i].get_exemplar()))
-        samples.append(('_count', {}, acc, None, None))
+            samples.append(Sample('_bucket', {'le': floatToGoString(bound)}, acc, None, self._buckets[i].get_exemplar()))
+        samples.append(Sample('_count', {}, acc, None, None))
         if self._upper_bounds[0] >= 0:
-            samples.append(('_sum', {}, self._sum.get(), None, None))
-        samples.append(('_created', {}, self._created, None, None))
+            samples.append(Sample('_sum', {}, self._sum.get(), None, None))
+        samples.append(Sample('_created', {}, self._created, None, None))
         return tuple(samples)
 
 
@@ -649,14 +645,14 @@ class Info(MetricWrapperBase):
     def info(self, val):
         """Set info metric."""
         if self._labelname_set.intersection(val.keys()):
-            raise ValueError('Overlapping labels for Info metric, metric: %s child: %s' % (
+            raise ValueError('Overlapping labels for Info metric, metric: {} child: {}'.format(
                 self._labelnames, val))
         with self._lock:
             self._value = dict(val)
 
-    def _child_samples(self):
+    def _child_samples(self) -> Iterable[Sample]:
         with self._lock:
-            return (('_info', self._value, 1.0, None, None),)
+            return (Sample('_info', self._value, 1.0, None, None),)
 
 
 class Enum(MetricWrapperBase):
@@ -675,17 +671,17 @@ class Enum(MetricWrapperBase):
     _type = 'stateset'
 
     def __init__(self,
-                 name,
-                 documentation,
-                 labelnames=(),
-                 namespace='',
-                 subsystem='',
-                 unit='',
-                 registry=REGISTRY,
-                 _labelvalues=None,
-                 states=None,
+                 name: str,
+                 documentation: str,
+                 labelnames: Sequence[str] = (),
+                 namespace: str = '',
+                 subsystem: str = '',
+                 unit: str = '',
+                 registry: Optional[CollectorRegistry] = REGISTRY,
+                 _labelvalues: Optional[Sequence[str]] = None,
+                 states: Optional[Sequence[str]] = None,
                  ):
-        super(Enum, self).__init__(
+        super().__init__(
             name=name,
             documentation=documentation,
             labelnames=labelnames,
@@ -696,25 +692,25 @@ class Enum(MetricWrapperBase):
             _labelvalues=_labelvalues,
         )
         if name in labelnames:
-            raise ValueError('Overlapping labels for Enum metric: %s' % (name,))
+            raise ValueError(f'Overlapping labels for Enum metric: {name}')
         if not states:
-            raise ValueError('No states provided for Enum metric: %s' % (name,))
+            raise ValueError(f'No states provided for Enum metric: {name}')
         self._kwargs['states'] = self._states = states
 
-    def _metric_init(self):
+    def _metric_init(self) -> None:
         self._value = 0
         self._lock = Lock()
 
-    def state(self, state):
+    def state(self, state: str) -> None:
         """Set enum metric state."""
         self._raise_if_not_observable()
         with self._lock:
             self._value = self._states.index(state)
 
-    def _child_samples(self):
+    def _child_samples(self) -> Iterable[Sample]:
         with self._lock:
             return [
-                ('', {self._name: s}, 1 if i == self._value else 0, None, None)
+                Sample('', {self._name: s}, 1 if i == self._value else 0, None, None)
                 for i, s
                 in enumerate(self._states)
             ]
