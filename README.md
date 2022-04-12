@@ -252,6 +252,13 @@ h = Histogram('request_latency_seconds', 'Description of histogram')
 h.observe(4.7, {'trace_id': 'abc123'})
 ```
 
+### Disabling `_created` metrics
+
+By default counters, histograms, and summaries export an additional series
+suffixed with `_created` and a value of the unix timestamp for when the metric
+was created. If this information is not helpful, it can be disabled by setting
+the environment variable `PROMETHEUS_DISABLE_CREATED_SERIES=True`.
+
 ### Process Collector
 
 The Python client automatically exports metrics about process CPU usage, RAM,
@@ -338,6 +345,14 @@ from prometheus_client import start_wsgi_server
 start_wsgi_server(8000)
 ```
 
+By default, the WSGI application will respect `Accept-Encoding:gzip` headers used by Prometheus
+and compress the response if such a header is present. This behaviour can be disabled by passing
+`disable_compression=True` when creating the app, like this:
+
+```python
+app = make_wsgi_app(disable_compression=True)
+```
+
 #### ASGI
 
 To use Prometheus with [ASGI](http://asgi.readthedocs.org/en/latest/), there is
@@ -350,6 +365,14 @@ app = make_asgi_app()
 ```
 Such an application can be useful when integrating Prometheus metrics with ASGI
 apps.
+
+By default, the WSGI application will respect `Accept-Encoding:gzip` headers used by Prometheus
+and compress the response if such a header is present. This behaviour can be disabled by passing 
+`disable_compression=True` when creating the app, like this:
+
+```python
+app = make_asgi_app(disable_compression=True)
+```
 
 #### Flask
 
