@@ -47,7 +47,7 @@ other information about the process for free!
 ## Installation
 
 ```
-pip install prometheus_client
+pip install prometheus-client
 ```
 
 This package can be found on
@@ -278,6 +278,18 @@ metadata about the JVM in use is also included. This information is available as
 labels on the `python_info` metric. The value of the metric is 1, since it is the 
 labels that carry information.
 
+### Disabling Default Collector metrics
+
+By default the collected `process`, `gc`, and `platform` collector metrics are exported.
+If this information is not helpful, it can be disabled using the following:
+```python
+import prometheus_client
+
+prometheus_client.REGISTRY.unregister(prometheus_client.GC_COLLECTOR)
+prometheus_client.REGISTRY.unregister(prometheus_client.PLATFORM_COLLECTOR)
+prometheus_client.REGISTRY.unregister(prometheus_client.PROCESS_COLLECTOR)
+```
+
 ## Exporting
 
 There are several options for exporting metrics.
@@ -471,6 +483,24 @@ g.set_to_current_time()
 push_to_gateway('localhost:9091', job='batchA', registry=registry, handler=my_auth_handler)
 ```
 
+TLS Auth is also supported when using the push gateway with a special handler.
+
+```python
+from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
+from prometheus_client.exposition import tls_handler
+
+
+def my_auth_handler(url, method, timeout, headers, data):
+    certfile = 'client-crt.pem'
+    keyfile = 'client-key.pem'
+    return tls_auth_handler(url, method, timeout, headers, data, certfile, keyfile)
+
+registry = CollectorRegistry()
+g = Gauge('job_last_success_unixtime', 'Last time a batch job successfully finished', registry=registry)
+g.set_to_current_time()
+push_to_gateway('localhost:9091', job='batchA', registry=registry, handler=my_auth_handler)
+```
+
 ## Bridges
 
 It is also possible to expose metrics to systems other than Prometheus.
@@ -609,14 +639,17 @@ def child_exit(server, worker):
 
 **4. Metrics tuning (Gauge)**:
 
-When `Gauge` metrics are used, additional tuning needs to be performed.
+When `Gauge`s are used in multiprocess applications,
+you must decide how to handle the metrics reported by each process.
 Gauges have several modes they can run in, which can be selected with the `multiprocess_mode` parameter.
 
-- 'all': Default. Return a timeseries per process alive or dead.
-- 'liveall': Return a timeseries per process that is still alive.
-- 'livesum': Return a single timeseries that is the sum of the values of alive processes.
-- 'max': Return a single timeseries that is the maximum of the values of all processes, alive or dead.
-- 'min': Return a single timeseries that is the minimum of the values of all processes, alive or dead.
+- 'all': Default. Return a timeseries per process (alive or dead), labelled by the process's `pid` (the label is added internally).
+- 'min': Return a single timeseries that is the minimum of the values of all processes (alive or dead).
+- 'max': Return a single timeseries that is the maximum of the values of all processes (alive or dead).
+- 'sum': Return a single timeseries that is the sum of the values of all processes (alive or dead).
+
+Prepend 'live' to the beginning of the mode to return the same result but only considering living processes
+(e.g., 'liveall, 'livesum', 'livemax', 'livemin').
 
 ```python
 from prometheus_client import Gauge
