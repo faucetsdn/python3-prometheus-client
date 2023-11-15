@@ -8,7 +8,7 @@ with open(path.join(path.abspath(path.dirname(__file__)), 'README.md')) as f:
 
 setup(
     name="prometheus_client",
-    version="0.17.1",
+    version="0.18.0",
     author="Brian Brazil",
     author_email="brian.brazil@robustperception.io",
     description="Python client for the Prometheus monitoring system.",
@@ -30,7 +30,7 @@ setup(
         'twisted': ['twisted'],
     },
     test_suite="tests",
-    python_requires=">=3.6",
+    python_requires=">=3.8",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -38,12 +38,11 @@ setup(
         "Intended Audience :: System Administrators",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: Implementation :: CPython",
         "Programming Language :: Python :: Implementation :: PyPy",
         "Topic :: System :: Monitoring",
