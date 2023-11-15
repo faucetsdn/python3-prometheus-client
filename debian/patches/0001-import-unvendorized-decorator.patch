@@ -9,9 +9,9 @@ Index: python3-prometheus-client/prometheus_client/context_managers.py
 ===================================================================
 --- python3-prometheus-client.orig/prometheus_client/context_managers.py
 +++ python3-prometheus-client/prometheus_client/context_managers.py
-@@ -6,7 +6,7 @@ from typing import Any, Callable, Option
- if sys.version_info >= (3, 8, 0):
-     from typing import Literal
+@@ -5,7 +5,7 @@ from typing import (
+     Union,
+ )
  
 -from .decorator import decorate
 +from decorator import decorate
