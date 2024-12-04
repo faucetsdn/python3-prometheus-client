@@ -38,5 +38,5 @@ Index: python3-prometheus-client/tests/test_core.py
 +    return spec.args, spec.varargs, spec.varkw, spec.defaults
 +
  
- def is_locked(lock):
-     "Tries to obtain a lock, returns True on success, False on failure."
+ def assert_not_observable(fn, *args, **kwargs):
+     """
