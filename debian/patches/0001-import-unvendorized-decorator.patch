@@ -22,12 +22,15 @@ Index: python3-prometheus-client/tests/test_core.py
 ===================================================================
 --- python3-prometheus-client.orig/tests/test_core.py
 +++ python3-prometheus-client/tests/test_core.py
-@@ -12,9 +12,16 @@ from prometheus_client.core import (
+@@ -12,12 +12,19 @@ from prometheus_client.core import (
      HistogramMetricFamily, Info, InfoMetricFamily, Metric, Sample,
      StateSetMetricFamily, Summary, SummaryMetricFamily, UntypedMetricFamily,
  )
 -from prometheus_client.decorator import getargspec
  from prometheus_client.metrics import _get_use_created
+ from prometheus_client.validation import (
+     disable_legacy_validation, enable_legacy_validation,
+ )
  
 +from inspect import getfullargspec
 +
