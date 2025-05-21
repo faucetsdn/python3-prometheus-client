@@ -1,0 +1,22 @@
+Index: python3-prometheus-client/pyproject.toml
+===================================================================
+--- python3-prometheus-client.orig/pyproject.toml
++++ python3-prometheus-client/pyproject.toml
+@@ -47,3 +47,17 @@ Documentation = "https://prometheus.gith
+ 
+ [tool.setuptools.package-data]
+ prometheus_client = ['py.typed']
++
++[tool.setuptools.data-files]
++"tests" = [
++  "tests/certs/*",
++  "tests/proc/stat",
++  "tests/proc/584/*",
++  "tests/proc/26231/limits",
++  "tests/proc/26231/stat",
++  "tests/proc/26231/fd/*",
++]
++
++[tool.setuptools.packages.find]
++where = ["."]
++exclude = ["debian"]
