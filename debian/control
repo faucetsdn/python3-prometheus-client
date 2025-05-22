@@ -6,6 +6,7 @@ Section: python
 Priority: optional
 Build-Depends: debhelper (>= 11),
 Build-Depends-Indep: dh-python,
+                     pybuild-plugin-pyproject,
                      python3-all,
                      python3-decorator (>= 4.0.10),
                      python3-pytest,

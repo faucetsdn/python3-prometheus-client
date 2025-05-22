@@ -2,9 +2,9 @@ import math
 import unittest
 
 from prometheus_client.core import (
-    CollectorRegistry, CounterMetricFamily, Exemplar,
+    BucketSpan, CollectorRegistry, CounterMetricFamily, Exemplar,
     GaugeHistogramMetricFamily, GaugeMetricFamily, HistogramMetricFamily,
-    InfoMetricFamily, Metric, Sample, StateSetMetricFamily,
+    InfoMetricFamily, Metric, NativeHistogram, Sample, StateSetMetricFamily,
     SummaryMetricFamily, Timestamp,
 )
 from prometheus_client.openmetrics.exposition import generate_latest
@@ -28,6 +28,24 @@ a_total 9223372036854775808
 # EOF
 """)
         self.assertEqual([CounterMetricFamily("a", "help", value=9223372036854775808)], list(families))
+
+    def test_utf8_counter(self):
+        families = text_string_to_metric_families("""# TYPE "my.counter" counter
+# HELP "my.counter" help
+{"my.counter_total"} 1
+# EOF
+""")
+        self.assertEqual([CounterMetricFamily("my.counter", "help", value=1)], list(families))
+
+    def test_complex_name_counter(self):
+        families = text_string_to_metric_families("""# TYPE "my.counter{} # = \\" \\n" counter
+# HELP "my.counter{} # = \\" \\n" help
+{"my.counter{} # = \\" \\n_total", "awful. }}{{ # HELP EOF name"="\\n yikes } \\" value"} 1
+# EOF
+""")
+        metric = CounterMetricFamily("my.counter{} # = \" \n", "help", labels={'awful. }}{{ # HELP EOF name': '\n yikes } " value'})
+        metric.add_sample("my.counter{} # = \" \n_total", {'awful. }}{{ # HELP EOF name': '\n yikes } " value'}, 1)
+        self.assertEqual([metric], list(families))
 
     def test_simple_gauge(self):
         families = text_string_to_metric_families("""# TYPE a gauge
@@ -128,6 +146,18 @@ a_sum 2.0
         self.assertEqual([HistogramMetricFamily("a", "help", sum_value=2, buckets=[("1.0", 0.0), ("+Inf", 3.0)])],
                          list(families))
 
+    def test_utf8_histogram_float_values(self):
+        families = text_string_to_metric_families("""# TYPE "a.b" histogram
+# HELP "a.b" help
+{"a.b_bucket", le="1.0"} 0.0
+{"a.b_bucket", le="+Inf"} 3.0
+{"a.b_count"} 3.0
+{"a.b_sum"} 2.0
+# EOF
+""")
+        self.assertEqual([HistogramMetricFamily("a.b", "help", sum_value=2, buckets=[("1.0", 0.0), ("+Inf", 3.0)])],
+                         list(families))
+
     def test_histogram_noncanonical(self):
         families = text_string_to_metric_families("""# TYPE a histogram
 # HELP a help
@@ -176,6 +206,128 @@ a_bucket{le="+Inf"} 3 # {a="2345678901234567890123456789012345678901234567890123
                                 Timestamp(123, 0)))
         self.assertEqual([hfm], list(families))
 
+    def test_native_histogram(self):
+        families = text_string_to_metric_families("""# TYPE nativehistogram histogram
+# HELP nativehistogram Is a basic example of a native histogram
+nativehistogram {count:24,sum:100,schema:0,zero_threshold:0.001,zero_count:4,positive_spans:[0:2,1:2],negative_spans:[0:2,1:2],positive_deltas:[2,1,-3,3],negative_deltas:[2,1,-2,3]}
+# EOF
+""")
+        families = list(families)
+
+        hfm = HistogramMetricFamily("nativehistogram", "Is a basic example of a native histogram")
+        hfm.add_sample("nativehistogram", None, None, None, None, NativeHistogram(24, 100, 0, 0.001, 4, (BucketSpan(0, 2), BucketSpan(1, 2)), (BucketSpan(0, 2), BucketSpan(1, 2)), (2, 1, -3, 3), (2, 1, -2, 3)))
+        self.assertEqual([hfm], families)
+
+    def test_native_histogram_utf8(self):
+        families = text_string_to_metric_families("""# TYPE "native{histogram" histogram
+# HELP "native{histogram" Is a basic example of a native histogram
+{"native{histogram"} {count:24,sum:100,schema:0,zero_threshold:0.001,zero_count:4,positive_spans:[0:2,1:2],negative_spans:[0:2,1:2],positive_deltas:[2,1,-3,3],negative_deltas:[2,1,-2,3]}
+# EOF
+""")
+        families = list(families)
+
+        hfm = HistogramMetricFamily("native{histogram", "Is a basic example of a native histogram")
+        hfm.add_sample("native{histogram", None, None, None, None, NativeHistogram(24, 100, 0, 0.001, 4, (BucketSpan(0, 2), BucketSpan(1, 2)), (BucketSpan(0, 2), BucketSpan(1, 2)), (2, 1, -3, 3), (2, 1, -2, 3)))
+        self.assertEqual([hfm], families)
+
+    def test_native_histogram_utf8_stress(self):
+        families = text_string_to_metric_families("""# TYPE "native{histogram" histogram
+# HELP "native{histogram" Is a basic example of a native histogram
+{"native{histogram", "xx{} # {}"=" EOF # {}}}"} {count:24,sum:100,schema:0,zero_threshold:0.001,zero_count:4,positive_spans:[0:2,1:2],negative_spans:[0:2,1:2],positive_deltas:[2,1,-3,3],negative_deltas:[2,1,-2,3]}
+# EOF
+""")
+        families = list(families)
+
+        hfm = HistogramMetricFamily("native{histogram", "Is a basic example of a native histogram")
+        hfm.add_sample("native{histogram", {'xx{} # {}': ' EOF # {}}}'}, None, None, None, NativeHistogram(24, 100, 0, 0.001, 4, (BucketSpan(0, 2), BucketSpan(1, 2)), (BucketSpan(0, 2), BucketSpan(1, 2)), (2, 1, -3, 3), (2, 1, -2, 3)))
+        self.assertEqual([hfm], families)
+
+    def test_native_histogram_three_pos_spans_no_neg_spans_or_deltas(self):
+        families = text_string_to_metric_families("""# TYPE nhsp histogram
+# HELP nhsp Is a basic example of a native histogram with three spans
+nhsp {count:4,sum:6,schema:3,zero_threshold:2.938735877055719e-39,zero_count:1,positive_spans:[0:1,7:1,4:1],positive_deltas:[1,0,0]}
+# EOF
+""")
+        families = list(families)
+       
+        hfm = HistogramMetricFamily("nhsp", "Is a basic example of a native histogram with three spans")
+        hfm.add_sample("nhsp", None, None, None, None, NativeHistogram(4, 6, 3, 2.938735877055719e-39, 1, (BucketSpan(0, 1), BucketSpan(7, 1), BucketSpan(4, 1)), None, (1, 0, 0), None))
+        self.assertEqual([hfm], families)
+
+    def test_native_histogram_with_labels(self):
+        families = text_string_to_metric_families("""# TYPE hist_w_labels histogram
+# HELP hist_w_labels Is a basic example of a native histogram with labels
+hist_w_labels{foo="bar",baz="qux"} {count:24,sum:100,schema:0,zero_threshold:0.001,zero_count:4,positive_spans:[0:2,1:2],negative_spans:[0:2,1:2],positive_deltas:[2,1,-3,3],negative_deltas:[2,1,-2,3]}
+# EOF
+""")
+        families = list(families)
+
+        hfm = HistogramMetricFamily("hist_w_labels", "Is a basic example of a native histogram with labels")
+        hfm.add_sample("hist_w_labels", {"foo": "bar", "baz": "qux"}, None, None, None, NativeHistogram(24, 100, 0, 0.001, 4, (BucketSpan(0, 2), BucketSpan(1, 2)), (BucketSpan(0, 2), BucketSpan(1, 2)), (2, 1, -3, 3), (2, 1, -2, 3)))
+        self.assertEqual([hfm], families)
+
+    def test_native_histogram_with_labels_utf8(self):
+        families = text_string_to_metric_families("""# TYPE "hist.w.labels" histogram
+# HELP "hist.w.labels" Is a basic example of a native histogram with labels
+{"hist.w.labels", foo="bar",baz="qux"} {count:24,sum:100,schema:0,zero_threshold:0.001,zero_count:4,positive_spans:[0:2,1:2],negative_spans:[0:2,1:2],positive_deltas:[2,1,-3,3],negative_deltas:[2,1,-2,3]}
+# EOF
+""")
+        families = list(families)
+
+        hfm = HistogramMetricFamily("hist.w.labels", "Is a basic example of a native histogram with labels")
+        hfm.add_sample("hist.w.labels", {"foo": "bar", "baz": "qux"}, None, None, None, NativeHistogram(24, 100, 0, 0.001, 4, (BucketSpan(0, 2), BucketSpan(1, 2)), (BucketSpan(0, 2), BucketSpan(1, 2)), (2, 1, -3, 3), (2, 1, -2, 3)))
+        self.assertEqual([hfm], families)
+
+    def test_native_histogram_with_classic_histogram(self):
+        families = text_string_to_metric_families("""# TYPE hist_w_classic histogram
+# HELP hist_w_classic Is a basic example of a native histogram coexisting with a classic histogram
+hist_w_classic{foo="bar"} {count:24,sum:100,schema:0,zero_threshold:0.001,zero_count:4,positive_spans:[0:2,1:2],negative_spans:[0:2,1:2],positive_deltas:[2,1,-3,3],negative_deltas:[2,1,-2,3]}
+hist_w_classic_bucket{foo="bar",le="0.001"} 4
+hist_w_classic_bucket{foo="bar",le="+Inf"} 24
+hist_w_classic_count{foo="bar"} 24
+hist_w_classic_sum{foo="bar"} 100
+# EOF
+""")
+        families = list(families)
+
+        hfm = HistogramMetricFamily("hist_w_classic", "Is a basic example of a native histogram coexisting with a classic histogram")
+        hfm.add_sample("hist_w_classic", {"foo": "bar"}, None, None, None, NativeHistogram(24, 100, 0, 0.001, 4, (BucketSpan(0, 2), BucketSpan(1, 2)), (BucketSpan(0, 2), BucketSpan(1, 2)), (2, 1, -3, 3), (2, 1, -2, 3)))
+        hfm.add_sample("hist_w_classic_bucket", {"foo": "bar", "le": "0.001"}, 4.0, None, None, None)
+        hfm.add_sample("hist_w_classic_bucket", {"foo": "bar", "le": "+Inf"}, 24.0, None, None, None)
+        hfm.add_sample("hist_w_classic_count", {"foo": "bar"}, 24.0, None, None, None)
+        hfm.add_sample("hist_w_classic_sum", {"foo": "bar"}, 100.0, None, None, None)
+        self.assertEqual([hfm], families)
+
+    def test_native_plus_classic_histogram_two_labelsets(self):
+        families = text_string_to_metric_families("""# TYPE hist_w_classic_two_sets histogram
+# HELP hist_w_classic_two_sets Is an example of a native histogram plus a classic histogram with two label sets
+hist_w_classic_two_sets{foo="bar"} {count:24,sum:100,schema:0,zero_threshold:0.001,zero_count:4,positive_spans:[0:2,1:2],negative_spans:[0:2,1:2],positive_deltas:[2,1,-3,3],negative_deltas:[2,1,-2,3]}
+hist_w_classic_two_sets_bucket{foo="bar",le="0.001"} 4
+hist_w_classic_two_sets_bucket{foo="bar",le="+Inf"} 24
+hist_w_classic_two_sets_count{foo="bar"} 24
+hist_w_classic_two_sets_sum{foo="bar"} 100
+hist_w_classic_two_sets{foo="baz"} {count:24,sum:100,schema:0,zero_threshold:0.001,zero_count:4,positive_spans:[0:2,1:2],negative_spans:[0:2,1:2],positive_deltas:[2,1,-3,3],negative_deltas:[2,1,-2,3]}
+hist_w_classic_two_sets_bucket{foo="baz",le="0.001"} 4
+hist_w_classic_two_sets_bucket{foo="baz",le="+Inf"} 24
+hist_w_classic_two_sets_count{foo="baz"} 24
+hist_w_classic_two_sets_sum{foo="baz"} 100
+# EOF
+""")
+        families = list(families)
+
+        hfm = HistogramMetricFamily("hist_w_classic_two_sets", "Is an example of a native histogram plus a classic histogram with two label sets")
+        hfm.add_sample("hist_w_classic_two_sets", {"foo": "bar"}, None, None, None, NativeHistogram(24, 100, 0, 0.001, 4, (BucketSpan(0, 2), BucketSpan(1, 2)), (BucketSpan(0, 2), BucketSpan(1, 2)), (2, 1, -3, 3), (2, 1, -2, 3)))
+        hfm.add_sample("hist_w_classic_two_sets_bucket", {"foo": "bar", "le": "0.001"}, 4.0, None, None, None)
+        hfm.add_sample("hist_w_classic_two_sets_bucket", {"foo": "bar", "le": "+Inf"}, 24.0, None, None, None)
+        hfm.add_sample("hist_w_classic_two_sets_count", {"foo": "bar"}, 24.0, None, None, None)
+        hfm.add_sample("hist_w_classic_two_sets_sum", {"foo": "bar"}, 100.0, None, None, None)
+        hfm.add_sample("hist_w_classic_two_sets", {"foo": "baz"}, None, None, None, NativeHistogram(24, 100, 0, 0.001, 4, (BucketSpan(0, 2), BucketSpan(1, 2)), (BucketSpan(0, 2), BucketSpan(1, 2)), (2, 1, -3, 3), (2, 1, -2, 3)))
+        hfm.add_sample("hist_w_classic_two_sets_bucket", {"foo": "baz", "le": "0.001"}, 4.0, None, None, None)
+        hfm.add_sample("hist_w_classic_two_sets_bucket", {"foo": "baz", "le": "+Inf"}, 24.0, None, None, None)
+        hfm.add_sample("hist_w_classic_two_sets_count", {"foo": "baz"}, 24.0, None, None, None)
+        hfm.add_sample("hist_w_classic_two_sets_sum", {"foo": "baz"}, 100.0, None, None, None)
+        self.assertEqual([hfm], families)
+
     def test_simple_gaugehistogram(self):
         families = text_string_to_metric_families("""# TYPE a gaugehistogram
 # HELP a help
@@ -223,6 +375,16 @@ a_total 0 123 # {a="b"} 0.5
 """)
         cfm = CounterMetricFamily("a", "help")
         cfm.add_sample("a_total", {}, 0.0, Timestamp(123, 0), Exemplar({"a": "b"}, 0.5))
+        self.assertEqual([cfm], list(families))
+
+    def test_counter_exemplars_utf8(self):
+        families = text_string_to_metric_families("""# TYPE "a.b" counter
+# HELP "a.b" help
+{"a.b_total"} 0 123 # {"c{}d"="b"} 0.5
+# EOF
+""")
+        cfm = CounterMetricFamily("a.b", "help")
+        cfm.add_sample("a.b_total", {}, 0.0, Timestamp(123, 0), Exemplar({"c{}d": "b"}, 0.5))
         self.assertEqual([cfm], list(families))
 
     def test_counter_exemplars_empty_brackets(self):
@@ -421,10 +583,10 @@ a_total{foo="bar"} 1
     def test_escaping(self):
         families = text_string_to_metric_families("""# TYPE a counter
 # HELP a he\\n\\\\l\\tp
-a_total{foo="b\\"a\\nr"} 1
-a_total{foo="b\\\\a\\z"} 2
-a_total{foo="b\\"a\\nr # "} 3
-a_total{foo="b\\\\a\\z # "} 4
+{"a_total", foo="b\\"a\\nr"} 1
+{"a_total", foo="b\\\\a\\z"} 2
+{"a_total", foo="b\\"a\\nr # "} 3
+{"a_total", foo="b\\\\a\\z # "} 4
 # EOF
 """)
         metric_family = CounterMetricFamily("a", "he\n\\l\\tp", labels=["foo"])
@@ -491,66 +653,6 @@ a_bucket{le="+Inf",foo="bar # "} 3 # {a="d",foo="bar # bar"} 4
         hfm.add_sample("a_bucket", {"le": "+Inf", "foo": "bar # "}, 3.0, None, Exemplar({"a": "d", "foo": "bar # bar"}, 4))
         self.assertEqual([hfm], list(families))
 
-    def test_fallback_to_state_machine_label_parsing(self):
-        from unittest.mock import patch
-
-        from prometheus_client.openmetrics.parser import _parse_sample
-
-        parse_sample_function = "prometheus_client.openmetrics.parser._parse_sample"
-        parse_labels_function = "prometheus_client.openmetrics.parser._parse_labels"
-        parse_remaining_function = "prometheus_client.openmetrics.parser._parse_remaining_text"
-        state_machine_function = "prometheus_client.openmetrics.parser._parse_labels_with_state_machine"
-
-        parse_sample_return_value = Sample("a_total", {"foo": "foo # bar"}, 1)
-        with patch(parse_sample_function, return_value=parse_sample_return_value) as mock:
-            families = text_string_to_metric_families("""# TYPE a counter
-# HELP a help
-a_total{foo="foo # bar"} 1
-# EOF
-""")
-            a = CounterMetricFamily("a", "help", labels=["foo"])
-            a.add_metric(["foo # bar"], 1)
-            self.assertEqual([a], list(families))
-            mock.assert_called_once_with('a_total{foo="foo # bar"} 1')
-
-        # First fallback case
-        state_machine_return_values = [{"foo": "foo # bar"}, len('foo="foo # bar"}')]
-        parse_remaining_values = [1, None, None]
-        with patch(parse_labels_function) as mock1:
-            with patch(state_machine_function, return_value=state_machine_return_values) as mock2:
-                with patch(parse_remaining_function, return_value=parse_remaining_values) as mock3:
-                    sample = _parse_sample('a_total{foo="foo # bar"} 1')
-                    s = Sample("a_total", {"foo": "foo # bar"}, 1)
-                    self.assertEqual(s, sample)
-                    mock1.assert_not_called()
-                    mock2.assert_called_once_with('foo="foo # bar"} 1')
-                    mock3.assert_called_once_with('1')
-
-        # Second fallback case
-        state_machine_return_values = [{"le": "1.0"}, len('le="1.0"}')]
-        parse_remaining_values = [0.0, Timestamp(123, 0), Exemplar({"a": "b"}, 0.5)]
-        with patch(parse_labels_function) as mock1:
-            with patch(state_machine_function, return_value=state_machine_return_values) as mock2:
-                with patch(parse_remaining_function, return_value=parse_remaining_values) as mock3:
-                    sample = _parse_sample('a_bucket{le="1.0"} 0 123 # {a="b"} 0.5')
-                    s = Sample("a_bucket", {"le": "1.0"}, 0.0, Timestamp(123, 0), Exemplar({"a": "b"}, 0.5))
-                    self.assertEqual(s, sample)
-                    mock1.assert_not_called()
-                    mock2.assert_called_once_with('le="1.0"} 0 123 # {a="b"} 0.5')
-                    mock3.assert_called_once_with('0 123 # {a="b"} 0.5')
-
-        # No need to fallback case
-        parse_labels_return_values = {"foo": "foo#bar"}
-        parse_remaining_values = [1, None, None]
-        with patch(parse_labels_function, return_value=parse_labels_return_values) as mock1:
-            with patch(state_machine_function) as mock2:
-                with patch(parse_remaining_function, return_value=parse_remaining_values) as mock3:
-                    sample = _parse_sample('a_total{foo="foo#bar"} 1')
-                    s = Sample("a_total", {"foo": "foo#bar"}, 1)
-                    self.assertEqual(s, sample)
-                    mock1.assert_called_once_with('foo="foo#bar"')
-                    mock2.assert_not_called()
-                    mock3.assert_called_once_with('1')
 
     def test_roundtrip(self):
         text = """# HELP go_gc_duration_seconds A summary of the GC invocation durations.
@@ -636,8 +738,10 @@ bar_bucket{a="c",le="+Inf"} 0.0
             ('a{a=1} 1\n# EOF\n'),
             ('a{a="1} 1\n# EOF\n'),
             ('a{a=\'1\'} 1\n# EOF\n'),
+            ('"a" 1\n# EOF\n'),
             # Missing equal or label value.
             ('a{a} 1\n# EOF\n'),
+            ('a{"a} 1\n# EOF\n'),
             ('a{a"value"} 1\n# EOF\n'),
             ('a{a""} 1\n# EOF\n'),
             ('a{a=} 1\n# EOF\n'),
@@ -805,6 +909,7 @@ bar_bucket{a="c",le="+Inf"} 0.0
             ('# TYPE a histogram\na_bucket{le="+INF"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="2"} 0\na_bucket{le="1"} 0\na_bucket{le="+Inf"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{le="1"} 1\na_bucket{le="2"} 1\na_bucket{le="+Inf"} 0\n# EOF\n'),
+            ('# TYPE a histogram\na_bucket {} {}'),
             # Bad grouping or ordering.
             ('# TYPE a histogram\na_sum{a="1"} 0\na_sum{a="2"} 0\na_count{a="1"} 0\n# EOF\n'),
             ('# TYPE a histogram\na_bucket{a="1",le="1"} 0\na_bucket{a="2",le="+Inf""} '
@@ -822,6 +927,10 @@ bar_bucket{a="c",le="+Inf"} 0.0
             ('# TYPE a counter\n# TYPE a counter\n# EOF\n'),
             ('# TYPE a info\n# TYPE a counter\n# EOF\n'),
             ('# TYPE a_created gauge\n# TYPE a counter\n# EOF\n'),
+            # Bad native histograms.
+            ('# TYPE nh histogram\nnh {count:24\n# EOF\n'),
+            ('# TYPE nh histogram\nnh{} # {count:24\n# EOF\n'),
+
         ]:
             with self.assertRaises(ValueError, msg=case):
                 list(text_string_to_metric_families(case))
