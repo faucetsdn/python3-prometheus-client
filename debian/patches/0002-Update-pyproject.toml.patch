@@ -3,7 +3,7 @@ Index: python3-prometheus-client/pyproject.toml
 --- python3-prometheus-client.orig/pyproject.toml
 +++ python3-prometheus-client/pyproject.toml
 @@ -7,11 +7,7 @@ name = "prometheus_client"
- version = "0.22.1"
+ version = "0.23.1"
  description = "Python client for the Prometheus monitoring system."
  readme = "README.md"
 -license = "Apache-2.0 AND BSD-2-Clause"
