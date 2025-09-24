@@ -10,6 +10,7 @@ Build-Depends-Indep: dh-python,
                      python3-all,
                      python3-decorator (>= 4.0.10),
                      python3-pytest,
+                     python3-pytest-benchmark,
                      python3-setuptools,
 Rules-Requires-Root: no
 Standards-Version: 4.5.1
