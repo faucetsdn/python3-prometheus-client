@@ -10,7 +10,7 @@ jobs:
     name: "Build debian package"
     runs-on: ubuntu-latest
     container:
-      image: "debian:latest"
+      image: "debian:testing"
     steps:
       - name: Install dependencies
         run: |
