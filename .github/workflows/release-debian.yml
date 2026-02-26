@@ -15,7 +15,7 @@ jobs:
     environment:
       name: "release"
     container:
-      image: "debian:latest"
+      image: "debian:testing"
     steps:
       - name: Install dependencies
         run: |
