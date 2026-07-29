@@ -35,6 +35,12 @@ between process/Gunicorn runs (before startup is recommended).
 This environment variable should be set from a start-up shell script,
 and not directly from Python (otherwise it may not propagate to child processes).
 
+Note: on Windows Subsystem for Linux (WSL), set `PROMETHEUS_MULTIPROC_DIR` to a
+Linux-native filesystem path (e.g. `/tmp` or `/home/<user>`) rather than a
+Windows-mounted path (e.g. `/mnt/c/...`). On Windows-mounted filesystems the
+per-process metric files can be written with an incorrect internal offset,
+causing the collector to silently read no data.
+
 **2. Metrics collector**:
 
 The application must initialize a new `CollectorRegistry`, and store the
@@ -95,4 +101,54 @@ from prometheus_client import Gauge
 
 # Example gauge
 IN_PROGRESS = Gauge("inprogress_requests", "help", multiprocess_mode='livesum')
+```
+
+## API Reference
+
+### `MultiProcessCollector(registry, path=None)`
+
+Collector that aggregates metrics written by all processes in the multiprocess directory.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `registry` | `CollectorRegistry` | required | Registry to register with. Pass a registry created inside the request context to avoid duplicate metrics. |
+| `path` | `Optional[str]` | `None` | Path to the directory containing the per-process metric files. Defaults to the `PROMETHEUS_MULTIPROC_DIR` environment variable. |
+
+Raises `ValueError` if `path` is not set or does not point to an existing directory.
+
+```python
+from prometheus_client import multiprocess, CollectorRegistry
+
+def app(environ, start_response):
+    registry = CollectorRegistry(support_collectors_without_names=True)
+    multiprocess.MultiProcessCollector(registry)
+    ...
+```
+
+To use a custom path instead of the environment variable:
+
+```python
+collector = multiprocess.MultiProcessCollector(registry, path='/var/run/prom')
+```
+
+### `mark_process_dead(pid, path=None)`
+
+Removes the per-process metric files for a dead process. Call this from your process manager
+when a worker exits to prevent stale `live*` gauge values from accumulating.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `pid` | `int` | required | PID of the process that has exited. |
+| `path` | `Optional[str]` | `None` | Path to the multiprocess directory. Defaults to the `PROMETHEUS_MULTIPROC_DIR` environment variable. |
+
+Returns `None`. Only removes files for `live*` gauge modes (e.g. `livesum`, `liveall`); files
+for non-live modes are left in place so their last values remain visible until the directory is
+wiped on restart.
+
+```python
+# Gunicorn config
+from prometheus_client import multiprocess
+
+def child_exit(server, worker):
+    multiprocess.mark_process_dead(worker.pid)
 ```
